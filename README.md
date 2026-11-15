@@ -11,7 +11,7 @@ and no dependencies to install. Open it in a browser, or host it anywhere that s
 | Module | What it answers |
 | --- | --- |
 | **Brand & Market Intelligence** | What do we actually know, and how do we know it? Nine sections — overview, website intelligence, brand DNA, business model, products and services, audience, positioning, market intelligence, sources and evidence — every claim carrying its source, excerpt, confidence and verification status. |
-| **Competitive Intelligence** | Where does the brand stand? Positioning map, competitor directory and profiles, white-space analysis, global signal globe, category trends, competitive movement. |
+| **Competitive Intelligence** | Where does the brand stand? Competitor discovery, directory and profiles, positioning map, white-space and coverage analysis, side-by-side comparison, a filterable signal feed and an interactive globe. |
 | **Opportunity Signals** | Where could the brand move next? Brand position, market and competitive change, underserved needs, opportunities with linked evidence, an impact-against-feasibility matrix. |
 | **Growth Strategy** | How do we act on it? A strategy builder that starts from an accepted opportunity, a twelve-part strategy canvas, and a Meta workspace. |
 
@@ -49,6 +49,47 @@ engine connected the request is recorded and nothing is fetched; nothing is inve
 extracted, add information by hand, add and remove sources, filter the evidence table by
 verification status, expand findings, re-run discovery, and export the whole brand intelligence
 report as text with its provenance intact.
+
+## Module 02 — Competitive Intelligence
+
+Built on the brand profile from module 01. Nothing is asked for twice: category, markets,
+products, audience, positioning and objective all come from there, and discovery states on screen
+exactly which of them it is searching against.
+
+**Discovery** keeps candidates apart from the confirmed set. Anything suggested — by the engine, by
+a signal that names a company, or by you — arrives as a candidate with the reason it came up, and
+only a person moves it into the competitive set. Companies are marked direct, indirect, emerging or
+adjacent, and one ruled out stays on file as ruled out rather than being deleted and suggested
+again.
+
+**Profiles** carry website, category, positioning, value proposition, products, pricing where it is
+public, audience, messaging, distribution, differentiation, apparent strengths and weaknesses, head
+office and markets — each with its source, retrieval date and verification status, and the
+developments on file about that company. No market share, ranking or revenue appears anywhere in
+the module, because no source on file supports one.
+
+**The positioning map** is drawn on dimensions you choose and can rename, because the dimensions
+that decide a purchase differ by category. Inferred placements are drawn dashed and can be dragged;
+dragging one makes it yours. Discs that would overlap are relaxed apart for legibility with a leader
+line back to the true position — the stored judgement is never moved by the layout.
+
+**White-space analysis** answers ten questions for any territory, including who currently addresses
+it and who does not adequately, both from evidence. Beside it, coverage analysis checks every need,
+product, segment and messaging territory in the brand profile against what each competitor
+publishes, and reports where competitor records are silent — stated as silence, never as proven
+demand. The screen opens by saying so: an absence of evidence is not an absence of competition.
+
+**The signal feed** holds every development with its headline, competitor, date, event type, source,
+excerpt, limits, confidence, relevance and implication. Filter by competitor, event type, subject,
+geography, period and relevance; save what matters, dismiss what does not (dismissed is hidden,
+never deleted), and investigate any one in a side panel.
+
+**Comparison** puts the brand's own column first and compares up to any number of competitors across
+eleven dimensions, marking the rows that actually differ and computing the executive summary from
+the records rather than writing one.
+
+**The globe** plots located signals, rotates, zooms, and takes a country search or a region filter;
+selecting a region reports what is on file there and which competitors list that market.
 
 ## Running it
 

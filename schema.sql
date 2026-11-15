@@ -128,9 +128,13 @@ create table competitors (
   workspace_id uuid not null references workspaces(id) on delete cascade,
   brand_id uuid not null references brands(id) on delete cascade,
   name text not null,
-  kind text not null default 'Direct' check (kind in ('Direct','Indirect','Emerging')),
-  note text not null default '',
+  kind text not null default 'Direct' check (kind in ('Direct','Indirect','Emerging','Adjacent')),
+  website text not null default '',
+  category text not null default '',               -- industry and category, as the brand's own
+  note text not null default '',                   -- why this company matters here
+  why text not null default '',                    -- why it was suggested, if it was
   positioning text not null default '',
+  value_prop text not null default '',
   offering text not null default '',
   pricing text not null default '',
   messaging text not null default '',
@@ -138,6 +142,8 @@ create table competitors (
   audience text not null default '',
   distribution text not null default '',
   activity text not null default '',               -- publicly observable marketing activity
+  strengths text not null default '',
+  weaknesses text not null default '',
   positions jsonb not null default '{}',           -- 1-5 judgement per positioning dimension
   placed_by text,                                  -- user | ai | demo
   hq text not null default '',                     -- headquarters only
@@ -158,6 +164,10 @@ create table market_signals (
   category text not null default 'consumer' check (category in ('consumer','competitor','category','product','regulatory')),
   country text not null default '',                -- where the signal is from; blank = not located
   published_at timestamptz,
+  competitor_id uuid references competitors(id) on delete set null,  -- the company it is about, if one
+  event text not null default '',                  -- product launch, funding, market entry, ...
+  saved boolean not null default false,
+  dismissed boolean not null default false,        -- hidden from the feed, never deleted
   relevance text not null default 'Medium' check (relevance in ('Low','Medium','High')),
   implication text not null default '',            -- why it matters
   affects text not null default '',                -- what it affects
@@ -318,6 +328,7 @@ create index on products_services (brand_id);
 create index on audience_profiles (brand_id);
 create index on competitors (brand_id);
 create index on market_signals (brand_id);
+create index on market_signals (competitor_id);
 create index on research_requests (brand_id);
 create index on opportunities (brand_id);
 create index on opportunity_evidence (opportunity_id);
