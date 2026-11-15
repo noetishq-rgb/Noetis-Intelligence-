@@ -47,7 +47,8 @@ create table brands (
   name text not null,
   website text not null,
   category text not null,
-  geography text not null,
+  geography text not null,                         -- primary market
+  markets text not null default '',                -- other markets it sells into
   goal text not null default '',
   success text not null default '',
   status text not null default 'new' check (status in ('new','researching','ready')),
@@ -68,9 +69,10 @@ create table brand_profile_items (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
   brand_id uuid not null references brands(id) on delete cascade,
-  section text not null check (section in ('business','positioning','needs','category','identity')),
+  section text not null check (section in ('dna','business','positioning','needs','category','identity')),
   label text not null,
   text text not null,
+  excerpt text not null default '',                -- the words the claim came from, verbatim
   provenance text not null default 'unverified' check (provenance in ('brand_stated','observed','user_confirmed','ai_inferred','unverified')),
   confidence text not null default 'Medium' check (confidence in ('Low','Medium','High')),
   status text not null default 'candidate' check (status in ('candidate','confirmed','rejected')),
@@ -85,7 +87,13 @@ create table products_services (
   workspace_id uuid not null references workspaces(id) on delete cascade,
   brand_id uuid not null references brands(id) on delete cascade,
   name text not null,
+  category text not null default '',               -- range or type
   description text not null default '',
+  features text not null default '',
+  benefits text not null default '',
+  problem text not null default '',                -- the problem this one solves
+  pricing text not null default '',                -- price and packaging, as published
+  differentiator text not null default '',
   provenance text not null default 'unverified',
   source_url text not null default '',
   captured_at timestamptz,
@@ -99,7 +107,15 @@ create table audience_profiles (
   workspace_id uuid not null references workspaces(id) on delete cascade,
   brand_id uuid not null references brands(id) on delete cascade,
   kind text not null check (kind in ('intended','observed')),
+  name text not null default '',                   -- segment name, if it has one
   description text not null,
+  demographics text not null default '',           -- only ever recorded, never inferred
+  geography text not null default '',
+  motivations text not null default '',
+  pains text not null default '',
+  triggers text not null default '',
+  objections text not null default '',
+  behaviour text not null default '',
   basis text not null default '',                  -- Customer data | Team experience | Assumed
   provenance text not null default 'unverified',
   captured_at timestamptz,
@@ -143,9 +159,12 @@ create table market_signals (
   country text not null default '',                -- where the signal is from; blank = not located
   published_at timestamptz,
   relevance text not null default 'Medium' check (relevance in ('Low','Medium','High')),
-  implication text not null default '',
+  implication text not null default '',            -- why it matters
+  affects text not null default '',                -- what it affects
+  brand_meaning text not null default '',          -- what it could mean for this brand
   source_type text not null default 'Other',
-  text text not null,
+  text text not null,                              -- what is happening
+  excerpt text not null default '',                -- the words the finding came from
   sample text not null default '',
   limits text not null default '',
   confidence text not null default 'Medium' check (confidence in ('Low','Medium','High')),
@@ -185,6 +204,23 @@ create table opportunities (
   decided_by text,
   decided_at timestamptz,
   captured_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz
+);
+
+-- A market research request. Recorded whether or not an engine answers it, so an
+-- unanswered question stays visible instead of looking like it was never asked.
+create table research_requests (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  brand_id uuid not null references brands(id) on delete cascade,
+  topic text not null,
+  category text not null default '',
+  geography text not null default '',
+  segment text not null default '',
+  period text not null default '',
+  focus text not null default '',
+  status text not null default 'requested',
   created_at timestamptz not null default now(),
   updated_at timestamptz
 );
@@ -282,6 +318,7 @@ create index on products_services (brand_id);
 create index on audience_profiles (brand_id);
 create index on competitors (brand_id);
 create index on market_signals (brand_id);
+create index on research_requests (brand_id);
 create index on opportunities (brand_id);
 create index on opportunity_evidence (opportunity_id);
 create index on strategies (brand_id);
@@ -298,7 +335,7 @@ create policy "members read memberships" on workspace_members for select using (
 do $$
 declare t text;
 begin
-  foreach t in array array['brands','brand_profile_items','products_services','audience_profiles','competitors','market_signals','opportunities','opportunity_evidence','strategies'] loop
+  foreach t in array array['brands','brand_profile_items','products_services','audience_profiles','competitors','market_signals','opportunities','opportunity_evidence','strategies','research_requests'] loop
     execute format('alter table %I enable row level security', t);
     execute format('create policy "members read" on %I for select using (is_member(workspace_id))', t);
     execute format('create policy "editors insert" on %I for insert with check (can_edit(workspace_id))', t);

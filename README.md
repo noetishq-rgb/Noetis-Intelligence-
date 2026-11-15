@@ -10,13 +10,45 @@ and no dependencies to install. Open it in a browser, or host it anywhere that s
 
 | Module | What it answers |
 | --- | --- |
+| **Brand & Market Intelligence** | What do we actually know, and how do we know it? Nine sections — overview, website intelligence, brand DNA, business model, products and services, audience, positioning, market intelligence, sources and evidence — every claim carrying its source, excerpt, confidence and verification status. |
 | **Competitive Intelligence** | Where does the brand stand? Positioning map, competitor directory and profiles, white-space analysis, global signal globe, category trends, competitive movement. |
-| **Brand & Market Intelligence** | What do we actually know, and how do we know it? Nine chapters, every claim carrying its source, confidence and verification status. |
 | **Opportunity Signals** | Where could the brand move next? Brand position, market and competitive change, underserved needs, opportunities with linked evidence, an impact-against-feasibility matrix. |
 | **Growth Strategy** | How do we act on it? A strategy builder that starts from an accepted opportunity, a twelve-part strategy canvas, and a Meta workspace. |
 
 Every screen uses the same architecture: global navigation on the far left, the module's controls
 and filters beside it, and the intelligence canvas on the right.
+
+## Module 01 — Brand & Market Intelligence
+
+The first module, and the one every other module reads from. A brand is onboarded once and that
+understanding is reused everywhere.
+
+**Onboarding** runs in six steps — brand identification, business understanding, audience,
+positioning, marketing ecosystem, then review and confirm — one question at a time, with the
+reason for each question stated on screen. Every question can be skipped, and a skipped question is
+recorded as unknown rather than guessed at. The draft is saved as you type and survives closing the
+page.
+
+**Website intelligence** lists the six pages a discovery engine would read — homepage, about,
+product and service, pricing, FAQ, contact — and what was extracted from each. Pages that returned
+nothing say so, and anything can be entered by hand against the page it came from.
+
+**The canvas** holds the brand's expected fields rather than a free list, so a gap is visible as a
+gap: a field with nothing on file reads *Not on file* and offers to be filled, and the overview
+counts what is still empty in each section. Products carry features, benefits, pricing, the problem
+they solve and what makes them different. Intended and observed audiences are kept apart and never
+merged, each with demographics, geography, motivations, pains, triggers, objections and behaviour.
+
+**Market research** is requested from the left panel — topic, category, geography, segment, time
+period and focus — and each finding answers five questions: what is happening, what evidence
+supports it, why it matters, what it affects, and what it could mean for this brand. The evidence
+expands to the source, the sample, the excerpt and the limits of that evidence. With no research
+engine connected the request is recorded and nothing is fetched; nothing is invented to fill it.
+
+**Interactions**: add and switch brands, search within the brand profile, confirm or reject what was
+extracted, add information by hand, add and remove sources, filter the evidence table by
+verification status, expand findings, re-run discovery, and export the whole brand intelligence
+report as text with its provenance intact.
 
 ## Running it
 
