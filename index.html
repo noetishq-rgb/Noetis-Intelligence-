@@ -225,6 +225,25 @@ async function* RemoteEngine(brand) {
   for (;;) { const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); const lines = buf.split("\n"); buf = lines.pop(); for (const line of lines) if (line.trim()) yield JSON.parse(line); }
   if (buf.trim()) yield JSON.parse(buf);
 }
+/* The app cannot know whether a discovery engine is deployed beside it, so it asks once.
+   api/research answers GET with whether it is configured. Nothing is assumed either way. */
+async function detectEngine() {
+  if (CONFIG.RESEARCH_ENDPOINT || !/^https?:$/.test(location.protocol)) return;
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), 3000);
+  try {
+    const res = await fetch("/api/research", { signal: ac.signal });
+    if (!res.ok) return;
+    const j = await res.json();
+    if (!j || j.engine !== "noetis-research") return;
+    ENGINE.found = true; ENGINE.ready = !!j.ready; ENGINE.model = j.model || ""; ENGINE.webSearch = !!j.webSearch; ENGINE.reason = j.reason || "";
+    if (j.ready) CONFIG.RESEARCH_ENDPOINT = "/api/research";
+  } catch (e) { /* no engine deployed, or it did not answer: the app says so rather than guessing */ }
+  finally { clearTimeout(t); }
+}
+const ENGINE = { found: false, ready: false, model: "", webSearch: false, reason: "" };
+const engineNote = () => CONFIG.RESEARCH_ENDPOINT ? `Connected${ENGINE.model ? " · " + ENGINE.model : ""}${ENGINE.found && !ENGINE.webSearch ? " · site only, external research off" : ""}`
+  : ENGINE.found ? ENGINE.reason || "Deployed but not configured." : "Not connected.";
+
 function engineFor(brand) {
   if (CONFIG.RESEARCH_ENDPOINT) return { name: "remote", run: () => RemoteEngine(brand) };
   return { name: "manual", run: () => ManualEngine(brand) };
@@ -376,7 +395,7 @@ const DEMO = {
 
 /* ---------- 4. App --------------------------------------------------- */
 let store;
-const S = { route: "home", db: {}, brandId: null, run: null, wiz: null, drawer: null, strategyId: null, chapter: "overview", evFilter: "All", evQ: "", oppFilter: "Open", oppSort: "priority", oq: "", oppGeo: "All", oppAud: "All", oppProd: "All", oppCatF: "All", oppFeas: "Any", weights: { impact: 2, feasibility: 1, fit: 1, urgency: 1, confidence: 1 }, metaLevel: "campaign", panelOpen: false, open: {}, feedView: "open", covAll: false, cmp: [], cq: "", rq: "", ff: { comp: "All", event: "All", rel: "All" }, bq: "", saved: false, rr: { topic: "", category: "", geography: "", segment: "", period: "Last 90 days", focus: "Category structure" }, sigView: "overview", oppType: "All", sigKind: "All", metaTab: "overview", metaSim: true, sb: { opp: "", goal: "", channel: "Meta", funnel: "Consideration", market: "", budget: "", timeframe: "", measure: "" }, canvasF: { strength: "Any", urgency: "Any", horizon: "Any", impact: "Any" }, lf: { kind: "All", geo: "All", aud: "All", price: "All" }, wx: "price", wy: "approach", cell: null, globe: { lon: 78, lat: 18, zoom: 1, cat: "All", time: "All", region: "All", iso: null }, needsSignIn: false, bootError: "", loading: true };
+const S = { route: "home", db: {}, brandId: null, run: null, wiz: null, drawer: null, strategyId: null, chapter: "overview", evFilter: "All", evQ: "", oppFilter: "Open", oppSort: "priority", oq: "", oppGeo: "All", oppAud: "All", oppProd: "All", oppCatF: "All", oppFeas: "Any", weights: { impact: 2, feasibility: 1, fit: 1, urgency: 1, confidence: 1 }, metaLevel: "campaign", panelOpen: false, open: {}, reviewAfterRun: false, quick: { name: "", website: "", category: "", geography: "", err: "" }, feedView: "open", covAll: false, cmp: [], cq: "", rq: "", ff: { comp: "All", event: "All", rel: "All" }, bq: "", saved: false, rr: { topic: "", category: "", geography: "", segment: "", period: "Last 90 days", focus: "Category structure" }, sigView: "overview", oppType: "All", sigKind: "All", metaTab: "overview", metaSim: true, sb: { opp: "", goal: "", channel: "Meta", funnel: "Consideration", market: "", budget: "", timeframe: "", measure: "" }, canvasF: { strength: "Any", urgency: "Any", horizon: "Any", impact: "Any" }, lf: { kind: "All", geo: "All", aud: "All", price: "All" }, wx: "price", wy: "approach", cell: null, globe: { lon: 78, lat: 18, zoom: 1, cat: "All", time: "All", region: "All", iso: null }, needsSignIn: false, bootError: "", loading: true };
 TABLES.forEach(t => { S.db[t] = []; });
 const $ = id => document.getElementById(id);
 const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -471,9 +490,21 @@ async function startRun(b) {
       S.run.stage = ev.stage;
       if (ev.write) {
         const { table, row, links } = ev.write, { key, ...clean } = row;
-        const mineAlready = (table === "brand_profile_items" && (await store.list(table, { brand_id: b.id })).some(x => x.section === row.section && x.label === row.label && x.provenance === "user_confirmed"))
-          || (table === "audience_profiles" && (await store.list(table, { brand_id: b.id })).some(x => x.kind === row.kind && x.provenance === "user_confirmed"));
-        if (mineAlready) { S.run.kept++; S.run.log.push({ stage: ev.stage, kind: "skip", msg: `kept your confirmed answer for: ${row.label || row.kind}` }); if (S.route === "run") render(); continue; }
+        if (table === "brands") { await store.update("brands", b.id, clean); Object.assign(b, clean); S.run.saved++; S.run.log.push({ stage: ev.stage, kind: ev.kind, msg: ev.msg }); if (S.route === "run") render(); continue; }
+        /* Anything a person has already ruled on is never overwritten or proposed again, and a
+           candidate that is still waiting is refreshed in place rather than duplicated. */
+        const settled = x => x.provenance === "user_confirmed" || x.status === "confirmed" || x.status === "rejected";
+        const have = await store.list(table, { brand_id: b.id });
+        const same = { brand_profile_items: x => x.section === row.section && x.label === row.label,
+          products_services: x => x.name.toLowerCase() === String(row.name || "").toLowerCase(),
+          audience_profiles: x => x.kind === row.kind && (x.name || "") === (row.name || ""),
+          competitors: x => x.name.toLowerCase() === String(row.name || "").toLowerCase(),
+          market_signals: x => x.text === row.text || (row.source_url && x.source_url === row.source_url) }[table];
+        const prior = same ? have.find(same) : null;
+        const mineAlready = !!prior && settled(prior);
+        if (prior && !mineAlready) { await store.update(table, prior.id, clean); if (key) keys[key] = prior.id; S.run.saved++;
+          S.run.log.push({ stage: ev.stage, kind: ev.kind, msg: ev.msg }); if (S.route === "run") render(); continue; }
+        if (mineAlready) { S.run.kept++; S.run.log.push({ stage: ev.stage, kind: "skip", msg: `already on file, left alone: ${row.label || row.name || row.kind || "record"}` }); if (S.route === "run") render(); continue; }
         const saved = await store.insert(table, { ...clean, brand_id: b.id, captured_at: now() }); S.run.saved++;
         if (key) keys[key] = saved.id;
         for (const k of links || []) if (keys[k]) await store.insert("opportunity_evidence", { brand_id: b.id, opportunity_id: saved.id, signal_id: keys[k] });
@@ -485,6 +516,7 @@ async function startRun(b) {
   } catch (e) { S.run.status = "failed"; S.run.log.push({ stage: S.run.stage, kind: "warn", msg: "Run failed: " + (e.message || e) }); }
   await mutate(() => store.update("brands", b.id, { status: "ready", last_run_at: now(), last_run_status: S.run.status }),
     `Discovery run ${S.run.status} (${engine.name} engine): ${S.run.saved} records saved`, S.run.status === "failed" ? "The run failed. You can retry." : "Discovery finished.");
+  if (S.reviewAfterRun && S.run.status !== "failed" && S.route === "run") go("review");
 }
 
 
@@ -646,7 +678,7 @@ const V = {
     return `<div class="row" style="gap:24px">${running ? '<div class="pulse" aria-hidden="true"><i></i></div>' : ""}<div style="flex:1 1 400px;min-width:0" role="status"><div class="cap">${running ? `Working · step ${r.stage + 1} of 5` : "Run " + r.status} · ${r.engine} engine</div><h1 style="margin-top:8px">${title}</h1></div></div>
       <div class="row" style="gap:32px"><div><span style="font-size:32px;font-weight:600">${r.saved}</span> <span class="muted">records saved</span></div>${r.kept ? `<div><span style="font-size:32px;font-weight:600">${r.kept}</span> <span class="muted">of your confirmed answers left untouched</span></div>` : ""}</div>
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:32px"><div class="col" style="gap:18px">${stages}</div><div class="card mono" style="line-height:1.8;min-height:250px;gap:2px"><div class="cap" style="font-family:Inter,sans-serif;margin-bottom:8px">Live log</div>${log}</div></div>
-      <div class="row"><button class="go" data-act="nav" data-to="brand" ${running ? "disabled" : ""}>Open the workspace →</button>${r.status === "failed" ? '<button class="ghost" data-act="rerun">Retry</button>' : ""}<span class="muted small">${running ? "Each record is saved as it arrives. You can leave this page." : ""}</span></div>`;
+      <div class="row">${S.reviewAfterRun && r.status !== "failed" ? `<button class="go" data-act="nav" data-to="review" ${running ? "disabled" : ""}>Review what was found →</button>` : `<button class="go" data-act="nav" data-to="brand" ${running ? "disabled" : ""}>Open the workspace →</button>`}${r.status === "failed" ? '<button class="ghost" data-act="rerun">Retry</button>' : ""}<span class="muted small">${running ? "Each record is saved as it arrives. You can leave this page." : ""}</span></div>`;
   },
 
   meta() {
@@ -671,7 +703,7 @@ const V = {
     return `${head("Settings · data", "Where the data lives.")}${S.bootError ? `<div class="sunk" role="alert"><strong>Supabase did not connect.</strong> ${esc(S.bootError)} The app is using this browser's storage instead.</div>` : ""}
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:40px;align-items:start">
         <div class="col"><h2>${sb ? "Supabase" : "This browser"}</h2><p class="muted">${sb ? "Rows are read and written in your Supabase project, scoped to your workspace by Row Level Security." : store.persistent ? "Everything is saved in this browser's storage. It survives a refresh but exists only on this device, and other people cannot see it." : "Browser storage is unavailable here, so data lasts only until this page is closed."}</p>${auth}${sb ? "" : '<div class="row"><button class="ghost" data-act="copyData">Copy all data as JSON</button><button class="ghost" data-act="wipe">Erase local data</button></div>'}</div>
-        <div class="col"><h2>To go live</h2><ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px"><li>Run <span class="mono">schema.sql</span> in the Supabase SQL editor.</li><li>Fill <span class="mono">CONFIG.SUPABASE_URL</span> and <span class="mono">CONFIG.SUPABASE_ANON_KEY</span> at the top of this file.</li><li>Host the file on your own domain and sign in from this page.</li><li>Deploy a discovery function and set <span class="mono">CONFIG.RESEARCH_ENDPOINT</span>.</li><li>Register a Meta app, add the OAuth routes, set <span class="mono">CONFIG.META_OAUTH_START_URL</span>.</li></ol><p class="small muted">Discovery engine: ${CONFIG.RESEARCH_ENDPOINT ? "endpoint set" : "not connected"}. Meta: ${CONFIG.META_OAUTH_START_URL ? "start URL set" : "not connected"}.</p></div></div>`;
+        <div class="col"><h2>To go live</h2><ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px"><li>Run <span class="mono">schema.sql</span> in the Supabase SQL editor.</li><li>Fill <span class="mono">CONFIG.SUPABASE_URL</span> and <span class="mono">CONFIG.SUPABASE_ANON_KEY</span> at the top of this file.</li><li>Host the file on your own domain and sign in from this page.</li><li>Deploy the discovery engine: <span class="mono">api/research.js</span> ships in this repository, so deploying the repo deploys it. Set <span class="mono">ANTHROPIC_API_KEY</span> in the host's environment variables and the app finds it at <span class="mono">/api/research</span> by itself. Hosting the file on its own, without that function, leaves the engine unconnected — set <span class="mono">CONFIG.RESEARCH_ENDPOINT</span> by hand if it lives elsewhere.</li><li>Register a Meta app, add the OAuth routes, set <span class="mono">CONFIG.META_OAUTH_START_URL</span>.</li></ol><p class="small muted">Discovery engine: ${CONFIG.RESEARCH_ENDPOINT ? "endpoint set" : "not connected"}. Meta: ${CONFIG.META_OAUTH_START_URL ? "start URL set" : "not connected"}.</p></div></div>`;
   }
 };
 const CANVAS = [["objective", "Objective", "What this strategy is meant to achieve."], ["funnel_role", "Funnel role", "Where in the journey this channel does its work."], ["audience", "Audience", "Who we are reaching here."], ["tension", "Customer tension", "The friction or doubt we are answering."], ["message", "Strategic message", "The one thing we want them to take away."], ["territories", "Creative territories", "Directions and example concepts."], ["formats", "Formats and placements", "Only what the channel actually supports."], ["testing_plan", "Distribution and testing plan", "What runs, in what order, and what we compare."], ["budget_assumptions", "Budget assumptions", "Stated as assumptions, not commitments."], ["kpi", "KPI and measurement", "What we measure and how we will read it."], ["risks", "Risks and dependencies", "What could stop this or make it misleading."], ["next_actions", "Next actions", "The first few concrete steps."]];
@@ -736,7 +768,7 @@ V.home = function () {
   const demo = S.db.brands.find(b => b.is_demo);
   const rows = S.db.brands.map(b => { const f = facts(b.id); return `<button class="card" data-act="openBrand" data-id="${b.id}" style="gap:14px"><span class="row between"><span style="font-size:17px;font-weight:600">${esc(b.name)}</span>${b.is_demo ? '<span class="tag ai">DEMO</span>' : ""}</span><span class="small muted">${esc(b.category)} · ${esc(b.geography)} · ${esc(b.website)}</span><span class="row small" style="gap:6px 18px"><span><strong>${f.live.length}</strong> <span class="muted">competitors</span></span><span><strong>${f.signals.length}</strong> <span class="muted">signals</span></span><span><strong>${f.accepted.length}</strong> <span class="muted">accepted opportunities</span></span><span><strong>${f.strategies.length}</strong> <span class="muted">strategies</span></span></span><span class="row" style="gap:10px;flex-wrap:nowrap"><span class="bar" style="flex:1"><i style="width:${f.pct}%;background:var(--butter)"></i></span><span class="small muted">Profile ${f.pct}% filled</span></span></button>`; }).join("");
   const demoPanel = `<div class="panel" style="border-color:var(--butter)"><span class="tag ai" style="align-self:flex-start">DEMO</span><h2>Open the demo workspace</h2><p class="muted">A fictional brand with everything filled in: competitor map, white-space analysis, located signals, opportunities, a strategy and illustrative Meta data. Every item is labelled as demo, and it can be reset or removed in one step.</p><div><button class="go" data-act="loadDemo">Open the demo</button></div></div>`;
-  const onboard = `<div class="panel"><span class="tag" style="align-self:flex-start">Your client</span><h2>Onboard a brand</h2><p class="muted">Six steps, one question at a time: who the brand is, the business, the audience, the positioning and the marketing already running. Every question can be skipped, and a skipped question is recorded as unknown rather than guessed at.</p><div><button class="${S.db.brands.length ? "go" : "ghost"}" data-act="nav" data-to="new">Start onboarding</button></div></div>`;
+  const onboard = `<div class="panel"><span class="tag" style="align-self:flex-start">Your client</span><h2>Add a brand</h2><p class="muted">Name, website, category. The engine reads the site, researches the category from outside sources, and files everything as candidates for you to confirm, correct or reject. ${CONFIG.RESEARCH_ENDPOINT ? "" : "<strong>The engine is not connected on this deployment</strong>, so for now the questions are the way in."}</p><div class="row" style="gap:8px"><button class="${S.db.brands.length ? "go" : "ghost"}" data-act="nav" data-to="quick">Add a brand →</button><button class="link small" data-act="nav" data-to="new">Answer the questions instead</button></div></div>`;
   if (!S.db.brands.length) return `${head("Workspace", "Start with a brand")}<p class="muted" style="max-width:640px;margin-top:-14px">NOETIS reads a brand once and uses that understanding everywhere: the competitive landscape, the brand and its market, the opportunities, and the strategy.</p><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">${demoPanel}${onboard}</div>`;
   return `${head("Workspace", "Brands", `<button class="go" data-act="nav" data-to="new">Onboard a brand</button>`)}<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">${rows}</div>${demo ? "" : `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">${demoPanel}</div>`}`;
 };
@@ -866,9 +898,13 @@ function sectionsFor(area, b, f) {
   if (area === "strategies") return { act: "nav", key: "to", items: GS.map(([to, l]) => [to, l, ""]), on: to => S.route === to || (to === "meta" && S.route === "metasetup") };
   if (area === "signals") { const n = { opps: f.opps.length, all: f.signals.length, recs: f.accepted.length };
     return { act: "sigView", key: "to", items: SIGV.map(([k, l]) => [k, l, n[k] != null ? `<span class="small muted">${n[k]}</span>` : ""]), on: to => S.sigView === to }; }
-  if (area === "brand") { const done = sec => FIELDS[sec].filter(l => f.items.some(i => i.section === sec && i.label === l && i.status !== "rejected")).length + "/" + FIELDS[sec].length;
+  if (area === "brand") { const waiting = f.items.filter(i => i.status === "candidate").length;
+    const done = sec => FIELDS[sec].filter(l => f.items.some(i => i.section === sec && i.label === l && i.status !== "rejected")).length + "/" + FIELDS[sec].length;
     const badge = { overview: "", website: String(f.items.filter(i => i.source_url).length || "—"), dna: done("dna"), business: done("business"), products: String(f.products.length || "—"), audience: f.aud.length + " · " + done("needs"), positioning: done("positioning"), market: done("category"), evidence: String(f.items.length + f.products.length + f.aud.length + f.comps.length + f.signals.length) };
-    return { act: "chapter", key: "to", items: CHAPTERS.map(([k, l]) => { const needs = CH_SECTION[k] && f.items.some(i => i.section === CH_SECTION[k] && i.status === "candidate"); return [k, l, `<span class="small" style="color:${needs ? "var(--warn)" : "var(--muted)"}">${needs ? "review" : badge[k]}</span>`]; }), on: to => S.route === "brand" && S.chapter === to }; }
+    const items = CHAPTERS.map(([k, l]) => { const needs = CH_SECTION[k] && f.items.some(i => i.section === CH_SECTION[k] && i.status === "candidate"); return [k, l, `<span class="small" style="color:${needs ? "var(--warn)" : "var(--muted)"}">${needs ? "review" : badge[k]}</span>`]; });
+    if (waiting) return { act: "chapter", key: "to", items, on: to => S.route === "brand" && S.chapter === to,
+      before: `<button class="nv sub ${S.route === "review" ? "on" : ""}" data-act="nav" data-to="review"><span>Review discovery</span><span class="small" style="color:var(--warn)">${waiting}</span></button>` };
+    return { act: "chapter", key: "to", items, on: to => S.route === "brand" && S.chapter === to }; }
   return null;
 }
 function onboardingSections() { const d = S.wiz.d, cur = S.wiz.step >= QS.length ? -1 : QS[S.wiz.step].g;
@@ -900,6 +936,13 @@ const P = {
     if (r === "landscape") return ctx + search + compFilters + picker;
     return ctx + dims + compFilters + research; },
   brand(b, f) { const ch = S.chapter, sec = CH_SECTION[ch], rr = S.rr;
+    if (S.route === "review") { const cand = f.items.filter(i => i.status === "candidate"), done = f.items.filter(i => i.status !== "candidate");
+      const by = p => cand.filter(i => i.provenance === p).length;
+      return pg("Review", `<div class="row" style="gap:10px;flex-wrap:nowrap"><span class="bar" style="flex:1"><i style="width:${f.items.length ? done.length / f.items.length * 100 : 0}%;background:var(--butter)"></i></span><strong class="small">${done.length}/${f.items.length}</strong></div>
+        ${[["brand_stated", "the brand states"], ["observed", "from outside sources"], ["ai_inferred", "read between the lines"]].map(([p, l]) => by(p) ? `<div class="row between small"><span>${by(p)} ${l}</span><button class="link small" data-act="confirmAll" data-v="${p}">Confirm</button></div>` : "").join("")}
+        ${cand.length ? `<button class="go" data-act="confirmAll" data-v="all">Confirm all ${cand.length}</button>` : `<button class="go" data-act="finishReview">Save and continue →</button>`}`)
+        + pg("The run", `<div class="small">${esc(b.website)}</div><div class="small muted">${S.run && S.run.brandId === b.id ? `${S.run.saved} records · run ${esc(S.run.status)} · ${esc(S.run.engine)} engine` : "Last run " + (b.last_run_at ? when(b.last_run_at) : "not recorded")}</div><button class="link small" data-act="nav" data-to="run">See the run log</button><button class="link small" data-act="rerun">Run discovery again</button>`)
+        + pg("How to read this", '<p class="small muted">Nothing here is in the profile yet. Confirming makes a claim yours, and a later run will not overwrite it. Rejecting keeps it on file as rejected rather than deleting it, so the same claim is not proposed again as if it were new.</p>'); }
     const search = pg("Search this profile", `<input class="field" id="bq" value="${esc(S.bq)}" placeholder="Claim, source or word"><p class="small muted">Filters the section on the right.</p>`);
     const add = sec ? `<button class="ghost" data-act="addField" data-section="${sec}">Add to this section</button>` : "";
     const perChapter = {
@@ -1178,6 +1221,65 @@ const findingBlock = (s, open) => `<div class="panel" style="gap:10px"><div clas
     <div><div class="cap">What it could mean for the brand</div><div>${esc(s.brand_meaning) || '<span class="muted">Not written</span>'}</div></div>` : ""}
   <div class="row" style="gap:6px;margin-top:auto"><button class="pill" data-act="expand" data-id="${s.id}">${open ? "Collapse" : "Expand the evidence"}</button><button class="pill" data-act="oppFromSignal" data-id="${s.id}">Frame an opportunity</button><button class="link small" data-act="edit" data-table="market_signals" data-id="${s.id}">Edit</button></div></div>`;
 
+V.quick = function () {
+  const q = S.quick, live = !!CONFIG.RESEARCH_ENDPOINT;
+  const fld = (k, label, ph, note) => `<label><span class="cap">${label}</span><input class="field" data-q="${k}" value="${esc(q[k])}" placeholder="${esc(ph)}" autocomplete="off" style="min-height:52px;font-size:16px">${note ? `<span class="small muted">${note}</span>` : ""}</label>`;
+  return `${head("Add a brand", "Three things, and the engine does the rest.")}
+    <div class="split"><div class="col" style="gap:18px">
+      <div class="col" style="gap:16px;max-width:620px">
+        ${fld("name", "Brand name", "e.g. AURELIA")}
+        ${fld("website", "Website", "brand.com", "The engine reads the homepage, about, product, pricing, FAQ and contact pages, within whatever robots.txt allows.")}
+        ${fld("category", "Category", "e.g. Skincare", "What it competes in, not the industry. Used to judge which competitors and signals are relevant.")}
+        ${fld("geography", "Primary market (optional)", "e.g. India", "Left blank, the engine takes it from the site if the site says.")}
+        ${q.err ? `<div class="err">${esc(q.err)}</div>` : ""}
+        ${live ? `<button class="go" data-act="runQuick" style="min-height:52px;font-size:16px">Research this brand →</button>
+          <p class="small muted">It reads the site, researches the category from external sources, and files everything as <strong>candidates</strong>. Nothing becomes part of the profile until you review it on the next screen. It takes a minute or two.</p>`
+        : `<div class="sunk col" style="gap:10px;align-items:flex-start"><div class="row" style="gap:8px"><span class="tag warn">Research engine not connected</span></div>
+            <p class="small">${ENGINE.found ? esc(ENGINE.reason) : "No discovery engine answers at <span class=\"mono\">/api/research</span> on this deployment."} Automatic research cannot run from the browser alone: a browser is not allowed to read another company's site, and an API key cannot live in a page anyone can view. Until the engine is deployed, nothing can be fetched, and nothing will be invented in its place.</p>
+            <div class="row" style="gap:8px"><button class="go" data-act="toOnboarding">Fill it in myself instead</button><button class="ghost" data-act="demo">Open the demo to see the full flow</button><button class="ghost" data-act="nav" data-to="data">How to connect the engine</button></div></div>`}
+      </div></div>
+      <div class="col"><div class="panel"><div class="cap">What it does, in order</div>
+        ${["Reads robots.txt, then the brand's own pages.", "Takes what the brand says about itself, with the sentence it came from.", "Researches the category and market from outside sources, with links and dates.", "Names competitors as candidates for you to judge.", "Files every claim with its source, confidence and verification status."].map((s, i) => `<div class="small" style="border-top:1px solid var(--line);padding-top:8px"><span class="muted mono">${i + 1}</span> ${s}</div>`).join("")}</div>
+        <div class="panel"><div class="cap">What it will not do</div>
+          <p class="small">Invent a fact to fill a gap. State a market size, share or growth rate. Return a source it did not open. Decide that a company is your competitor. Treat its own reading as confirmed.</p>
+          <p class="small muted">Everything it finds arrives as a candidate. You confirm, edit or reject each one.</p></div>
+        <div class="panel"><div class="cap">Engine</div><p class="small">${engineNote()}</p>${CONFIG.RESEARCH_ENDPOINT ? "" : '<button class="link small" data-act="nav" data-to="data">Deployment steps</button>'}</div></div></div>`;
+};
+
+/* The screen between a run and the profile: nothing the engine found is part of the brand's
+   record until it is confirmed here. */
+V.review = function () {
+  const b = brand(); if (!b) return noBrand(); const f = facts(b.id);
+  const cand = f.items.filter(i => i.status === "candidate"), done = f.items.filter(i => i.status !== "candidate");
+  const prods = f.products, auds = f.aud.filter(x => x.kind === "intended"), comps = f.comps.filter(c => c.status === "candidate");
+  const stated = cand.filter(i => i.provenance === "brand_stated"), inferred = cand.filter(i => i.provenance === "ai_inferred"), observed = cand.filter(i => i.provenance === "observed");
+  const row = r => `<div class="item"><div style="flex:1 1 150px;max-width:210px"><div class="cap">${esc(r.label)}</div><div class="small muted">${esc(SECTION_NAME[r.section] || r.section)}</div></div>
+    <div class="col" style="flex:999 1 320px;min-width:0;gap:6px"><div style="font-size:15.5px">${esc(r.text)}</div>
+      ${r.excerpt ? `<div class="small muted" style="border-left:2px solid var(--line2);padding-left:10px">“${esc(r.excerpt)}”</div>` : ""}
+      <div class="row" style="gap:8px">${provTag(r.provenance)}<span class="small muted">${esc(r.confidence)} confidence</span>${src(r)}</div></div>
+    <div class="row" style="gap:6px"><button class="pill" data-act="status" data-table="brand_profile_items" data-id="${r.id}" data-v="confirmed">Confirm</button><button class="pill" data-act="edit" data-table="brand_profile_items" data-id="${r.id}">Edit</button><button class="pill" data-act="status" data-table="brand_profile_items" data-id="${r.id}" data-v="rejected">Reject</button></div></div>`;
+  const group = (title, blurb, list2) => list2.length ? `<div class="col"><div class="row between"><h2>${title}</h2><span class="small muted">${list2.length}</span></div><p class="muted small">${blurb}</p><div>${list2.map(row).join("")}</div></div>` : "";
+  const pct = f.items.length ? Math.round(done.length / f.items.length * 100) : 0;
+  return `${head("Review what the engine found", cand.length ? "Does this match what you know?" : "Review finished.", demoTag(b))}
+    <p class="muted" style="max-width:820px;margin-top:-10px">Everything below was read from ${esc(b.website)} or researched from outside sources. None of it is part of ${esc(b.name)}'s profile yet. Confirm what is right, correct what is close, reject what is wrong — what you confirm becomes yours and is never overwritten by a later run.</p>
+    <div class="banner"><div class="row" style="gap:16px;flex:1"><span class="bar" style="flex:1;max-width:260px"><i style="width:${pct}%;background:var(--butter)"></i></span><span class="small">${done.length} of ${f.items.length} reviewed</span></div>
+      ${cand.length ? `<div class="row" style="gap:6px">${stated.length ? `<button class="pill" data-act="confirmAll" data-v="brand_stated">Confirm the ${stated.length} the brand states</button>` : ""}<button class="go" data-act="confirmAll" data-v="all">Confirm all ${cand.length}</button></div>`
+        : `<button class="go" data-act="finishReview">Save and continue to Competitive Intelligence →</button>`}</div>
+    ${cand.length ? "" : `<div class="sunk col" style="align-items:flex-start"><h3>Nothing left to review</h3><p class="muted">${done.length} claim${done.length === 1 ? "" : "s"} confirmed or rejected. The profile is live in Brand &amp; Market Intelligence, and the competitor candidates are waiting in Competitive Intelligence.</p><div class="row" style="gap:8px"><button class="go" data-act="finishReview">Continue to Competitive Intelligence →</button><button class="ghost" data-act="chapter" data-to="overview">Open the brand profile</button></div></div>`}
+    ${group("What the brand says about itself", "Taken from its own pages, with the sentence it came from. These are usually right, but a brand describing itself is still a claim, not a fact.", stated)}
+    ${group("Found in outside sources", "Each one carries the source it came from. Open it before confirming.", observed)}
+    ${group("Read between the lines", "Nothing states these: they are the engine's reading of the evidence. Treat them as the weakest thing on this page.", inferred)}
+    ${prods.length ? `<div class="col"><div class="row between"><h2>Products and services</h2><span class="small muted">${prods.length}</span></div><p class="muted small">Taken from the site. Correct a price or a description here and it is filed as yours.</p>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start">${prods.map(p => `<div class="panel" style="gap:6px"><div class="row between"><span style="font-weight:600">${esc(p.name)}</span>${provTag(p.provenance)}</div><div class="small">${esc(p.description) || '<span class="muted">No description</span>'}</div>${p.pricing ? `<div class="small muted">${esc(p.pricing)}</div>` : ""}<div class="row" style="gap:6px"><button class="pill" data-act="edit" data-table="products_services" data-id="${p.id}">Edit</button><button class="pill" data-act="del" data-table="products_services" data-id="${p.id}">Remove</button></div></div>`).join("")}</div></div>` : ""}
+    ${auds.length ? `<div class="col"><div class="row between"><h2>Who the brand says it is for</h2><span class="small muted">${auds.length}</span></div>
+      <p class="muted small">Intended audience only. Who actually buys cannot be read off a website, so it stays unknown until you add it from your own data.</p>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start">${auds.map(x => `<div class="panel" style="gap:6px"><div class="row between"><span style="font-weight:600">${esc(x.name) || "Intended audience"}</span>${provTag(x.provenance)}</div><div class="small">${esc(x.description)}</div><div class="row" style="gap:6px"><button class="pill" data-act="confirmAud" data-id="${x.id}">Confirm</button><button class="pill" data-act="edit" data-table="audience_profiles" data-id="${x.id}">Edit</button><button class="pill" data-act="del" data-table="audience_profiles" data-id="${x.id}">Remove</button></div></div>`).join("")}</div></div>` : ""}
+    ${comps.length ? `<div class="col"><div class="row between"><h2>Competitor candidates</h2><span class="small muted">${comps.length}</span></div><p class="muted small">Judged in Competitive Intelligence, not here, so the decision sits beside the rest of the competitive set. None of them is in it yet.</p>
+      <div class="row" style="gap:6px;flex-wrap:wrap">${comps.map(c => `<button class="chip" data-act="openComp" data-id="${c.id}">${esc(c.name)}<span class="muted" style="display:block;font-size:12px">${esc(c.kind)}</span></button>`).join("")}</div>
+      <div><button class="ghost" data-act="nav" data-to="discovery">Review them in Competitive Intelligence →</button></div></div>` : ""}
+    ${f.signals.length ? `<div class="col"><h2>Signals filed as evidence</h2><p class="muted small">${f.signals.length} on file, each with its source and limits. They are evidence, not claims about this brand, so they are reviewed where they are used.</p><div><button class="ghost" data-act="nav" data-to="moves">Open the signal feed →</button></div></div>` : ""}`;
+};
+
 V.brand = function () {
   const b = brand(); if (!b) return noBrand(); const f = facts(b.id), [msg, cta, act, to] = nextMove(b, f), ch = S.chapter, title = (CHAPTERS.find(c => c[0] === ch) || CHAPTERS[0])[1];
   const q = { overview: "What do we know about this brand?", website: "What does the brand's own site say?", dna: "What does the brand stand for?", business: "What business is it actually in?", products: "What does it sell?", audience: "Who is it for, and who actually buys?", positioning: "Why should anyone choose it?", market: "What is happening around it?", evidence: "Where did all of this come from?" }[ch];
@@ -1421,7 +1523,7 @@ V.integrations = function () {
   const b = brand(), row = (name, what, status, cls, act, to, label) => `<div class="item" style="justify-content:space-between;flex-wrap:nowrap;gap:20px"><div><div style="font-weight:600">${name}</div><div class="small muted">${what}</div></div><div class="row" style="gap:10px;flex:none">${act ? `<button class="link small" data-act="${act}" data-to="${to}">${label}</button>` : ""}<span class="tag ${cls}">${status}</span></div></div>`;
   return `${head("Integrations", "What is NOETIS connected to?")}<p class="muted" style="max-width:720px;margin-top:-12px">Nothing is shown as connected unless a real authorisation has succeeded.</p>
     <div class="col" style="gap:0"><h2 style="margin-bottom:8px">Channels</h2>${row("Meta Marketing API", "Read-only ad insights through Meta OAuth. First channel.", b && b.is_demo ? "Simulated in demo" : "Not connected", b && b.is_demo ? "ai" : "warn", "nav", "metasetup", "Requirements")}${PLANNED.map(p => row(p, "Planned. The strategy workspace accepts it; no data connection exists.", "Planned", "")).join("")}</div>
-    <div class="col" style="gap:0"><h2 style="margin-bottom:8px">Data and research</h2>${row("Database and sign-in (Supabase)", "Workspaces, roles and data isolation.", store.name === "supabase" ? "Connected" : "Not connected", store.name === "supabase" ? "ok" : "warn", "nav", "data", "Setup")}${row("Discovery engine", "Website reading, competitor and market research.", CONFIG.RESEARCH_ENDPOINT ? "Endpoint set" : "Not connected", CONFIG.RESEARCH_ENDPOINT ? "ok" : "warn")}${row("AI services", "Extraction, opportunity discovery and strategy generation.", "Not built", "")}</div>
+    <div class="col" style="gap:0"><h2 style="margin-bottom:8px">Data and research</h2>${row("Database and sign-in (Supabase)", "Workspaces, roles and data isolation.", store.name === "supabase" ? "Connected" : "Not connected", store.name === "supabase" ? "ok" : "warn", "nav", "data", "Setup")}${row("Discovery engine", "Website reading, competitor and market research.", engineNote(), CONFIG.RESEARCH_ENDPOINT ? "ok" : "warn")}${row("AI services", "Extraction, opportunity discovery and strategy generation.", "Not built", "")}</div>
     <p class="small muted">Each channel sits behind the same adapter interface, so adding one does not change the strategy workspace.</p>`;
 };
 
@@ -1434,16 +1536,16 @@ P.new = function () {
 
 /* ----- shell: compact global navigation, module control panel, context bar ----- */
 const NAV = [["brand", "01", "Brand & Market Intelligence"], ["ci", "02", "Competitive Intelligence"], ["signals", "03", "Opportunity Signals"], ["strategies", "04", "Growth Strategy"]];
-const areaOf = r => CI.some(c => c[0] === r) ? "ci" : r === "run" ? "brand" : ["meta", "metasetup", "builder"].includes(r) ? "strategies" : r;
+const areaOf = r => CI.some(c => c[0] === r) ? "ci" : ["run", "review", "quick"].includes(r) ? "brand" : ["meta", "metasetup", "builder"].includes(r) ? "strategies" : r;
 function render() {
   const b = brand(), r = S.route, area = areaOf(r), f = b && facts(b.id), running = S.run && S.run.status === "running" && S.run.brandId === S.brandId;
   DIMS = dimsFor(b);
   const sec = S.loading || S.needsSignIn ? null : r === "new" ? onboardingSections() : (r === "run" ? null : sectionsFor(area, b, f));
   const controls = S.loading || S.needsSignIn ? "" : r === "new" ? P.new() : (b && P[area] && r !== "run" ? P[area](b, f) : "");
-  const subTree = sec ? `<div class="subs col" style="gap:1px">${sec.items.map(([v, l, extra]) => `<button class="nv sub ${sec.on(v) ? "on" : ""}" ${sec.on(v) ? 'aria-current="page"' : ""} data-act="${sec.act}" data-${sec.key}="${v}"><span>${l}</span>${extra || ""}</button>`).join("")}</div>` : "";
+  const subTree = sec ? `<div class="subs col" style="gap:1px">${sec.before || ""}${sec.items.map(([v, l, extra]) => `<button class="nv sub ${sec.on(v) ? "on" : ""}" ${sec.on(v) ? 'aria-current="page"' : ""} data-act="${sec.act}" data-${sec.key}="${v}"><span>${l}</span>${extra || ""}</button>`).join("")}</div>` : "";
   $("shell").innerHTML = `<button data-act="nav" data-to="home" style="border:0;background:none;padding:4px 10px;text-align:left" aria-label="NOETIS, all brands"><span style="font-size:16px;font-weight:700;letter-spacing:.2em;display:block">NOETIS</span></button>
     <div class="col" style="gap:8px;padding:0 4px"><div><div class="cap" style="padding:0 6px 4px">Workspace</div><div class="small" style="padding:0 6px">NOETIS <span class="muted">· ${store.name === "supabase" ? "Supabase" : "local"}</span></div></div>
-      <label><span class="cap" style="padding:0 6px">Brand</span><select class="field" style="min-height:38px" id="brandSel">${b ? "" : '<option value="">None selected</option>'}${S.db.brands.map(x => `<option value="${x.id}" ${x.id === S.brandId ? "selected" : ""}>${esc(x.name)}${x.is_demo ? " · demo" : ""}</option>`).join("")}<option value="__new">+ Onboard a brand</option><option value="__all">All brands</option></select></label></div>
+      <label><span class="cap" style="padding:0 6px">Brand</span><select class="field" style="min-height:38px" id="brandSel">${b ? "" : '<option value="">None selected</option>'}${S.db.brands.map(x => `<option value="${x.id}" ${x.id === S.brandId ? "selected" : ""}>${esc(x.name)}${x.is_demo ? " · demo" : ""}</option>`).join("")}<option value="__new">+ Add a brand</option><option value="__all">All brands</option></select></label></div>
     <nav class="col" style="gap:2px" aria-label="Sections">${r === "new" ? `<div class="cap" style="padding:0 10px 2px">Onboarding a brand</div>${subTree}` : NAV.map(([k, n, label]) => `<button class="nv ${area === k ? "on" : ""}" ${area === k ? 'aria-current="page"' : ""} data-act="nav" data-to="${k === "brand" && running ? "run" : k}"><span class="mono" style="opacity:.7">${n}</span><span>${label}</span></button>${area === k ? subTree : ""}`).join("")}</nav>
     ${controls ? `<div class="ctrl">${controls}</div>` : ""}
     <div class="col" style="gap:2px;margin-top:auto">${[["activity", "Activity"], ["integrations", "Integrations"], ["data", "Settings"]].map(([k, l]) => `<button class="nv ${r === k ? "on" : ""}" data-act="nav" data-to="${k}">${l}</button>`).join("")}<div class="row small" style="padding:10px;border-top:1px solid var(--line);gap:10px;flex-wrap:nowrap"><span style="width:26px;height:26px;border-radius:50%;background:var(--s3);display:inline-flex;align-items:center;justify-content:center;font-weight:600;flex:none">${esc((store.user ? store.user.email : "You")[0].toUpperCase())}</span><span class="muted" style="overflow:hidden;text-overflow:ellipsis">${store.user ? esc(store.user.email) : "Local user"}</span></div></div>`;
@@ -1543,7 +1645,24 @@ const openDrawer = (type, id) => { S.drawer = { type, id }; render(); const c = 
 const posTarget = id => id.startsWith("b:") ? ["brands", id.slice(2)] : ["competitors", id.slice(2)];
 function savePos(id, patch, say) { const [table, rid] = posTarget(id), r = find(table, rid); return mutate(() => store.update(table, rid, { positions: { ...(r.positions || {}), ...patch }, placed_by: "user" }), `Positioned ${r.name} on the white-space map`, say); }
 const A = {
-  nav: d => { go(d.to); if (d.to === "new") focusWiz(); }, chapter: d => { S.chapter = d.to; S.bq = ""; go("brand"); }, palette: () => palette(true), palClose: (d, e) => { if (e.target.classList.contains("overlay")) palette(false); },
+  nav: d => { go(d.to); if (d.to === "new") focusWiz(); if (d.to === "quick") setTimeout(() => { const n = document.querySelector("[data-q=name]"); n && n.focus(); }, 40); },
+  runQuick: async () => { const q = S.quick, name = q.name.trim(), website = q.website.trim(), category = q.category.trim();
+    if (!name) return (S.quick.err = "Give the brand a name.", render());
+    if (!website) return (S.quick.err = "The engine needs a website to read.", render());
+    if (!/^(https?:\/\/)?[a-z0-9-]+(\.[a-z0-9-]+)+(\/.*)?$/i.test(website)) return (S.quick.err = "That doesn't look like a web address. Try brand.com", render());
+    if (!category) return (S.quick.err = "Give the category it competes in.", render());
+    S.quick.err = "";
+    const b = await store.insert("brands", { name, website, category, geography: q.geography.trim(), markets: "", goal: "", success: "", status: "researching", onboarding: {}, dim_labels: {}, positions: {} });
+    await store.insert("activity_events", { brand_id: b.id, actor: store.user ? store.user.email : "You", action: `Brand added from a website: ${name}` });
+    await loadAll(); S.brandId = b.id; S.quick = { name: "", website: "", category: "", geography: "", err: "" }; S.reviewAfterRun = true;
+    startRun(find("brands", b.id)); },
+  toOnboarding: () => { const q = S.quick; S.wiz = loadDraft();
+    Object.assign(S.wiz.d, { name: q.name.trim() || S.wiz.d.name, website: q.website.trim() || S.wiz.d.website, category: q.category.trim() || S.wiz.d.category, geography: q.geography.trim() || S.wiz.d.geography });
+    S.wiz.step = QS.findIndex(x => !answered(x, S.wiz.d)); if (S.wiz.step < 0) S.wiz.step = QS.length; saveDraft(); go("new"); focusWiz(); },
+  confirmAll: d => { const f = facts(S.brandId), rows = f.items.filter(i => i.status === "candidate" && (d.v === "all" || i.provenance === d.v));
+    if (!rows.length) return; mutate(async () => { for (const r of rows) await store.update("brand_profile_items", r.id, { status: "confirmed" }); },
+      `Confirmed ${rows.length} claims from the discovery run`, `${rows.length} confirmed. They are yours now, and a later run will not overwrite them.`); },
+  finishReview: () => { const b = brand(); mutate(() => store.update("brands", b.id, { reviewed_at: now(), status: "ready" }), "Brand profile reviewed and saved", "Saved. The profile is live in Brand & Market Intelligence.").then(() => go("discovery")); }, chapter: d => { S.chapter = d.to; S.bq = ""; go("brand"); }, palette: () => palette(true), palClose: (d, e) => { if (e.target.classList.contains("overlay")) palette(false); },
   closeModal: () => { $("modal").innerHTML = ""; }, closeDrawer: () => { S.drawer = null; render(); },
   evFilter: d => { S.evFilter = d.v; render(); }, expand: d => { S.open[d.id] = !S.open[d.id]; render(); },
   feedView: d => { S.feedView = d.v; render(); }, covAll: () => { S.covAll = !S.covAll; render(); },
@@ -1720,12 +1839,13 @@ document.addEventListener("input", e => { const t = e.target;
   if (t.dataset && t.dataset.w && S.wiz) { S.wiz.d[t.dataset.w] = t.value; saveDraft(); }
   if (t.dataset && t.dataset.sb) S.sb[t.dataset.sb] = t.value;
   if (t.dataset && t.dataset.rr) S.rr[t.dataset.rr] = t.value;
+  if (t.dataset && t.dataset.q) { S.quick[t.dataset.q] = t.value; return; }
   if (t.dataset && t.dataset.w5) return A.w5(t.dataset.w5, t.value);
   if (["evQ", "bq", "cq", "rq", "oq"].includes(t.id)) { const id = t.id, pos = t.selectionStart; ({ evQ: () => S.evQ = t.value, bq: () => S.bq = t.value, cq: () => S.cq = t.value, rq: () => S.rq = t.value, oq: () => S.oq = t.value })[id](); render(); const n = $(id); if (n) { n.focus(); n.setSelectionRange(pos, pos); } } });
 document.addEventListener("change", e => { const t = e.target;
   if (t.dataset && t.dataset.cmp) return A.cmpToggle({ id: t.dataset.cmp });
   if (t.dataset && t.dataset.kind) return A.compKind({ id: t.dataset.kind }, t.value);
-  if (t.id === "brandSel") { if (t.value === "__new") { go("new"); focusWiz(); } else if (t.value === "__all") go("home"); else if (t.value) A.openBrand({ id: t.value }); }
+  if (t.id === "brandSel") { if (t.value === "__new") A.nav({ to: "quick" }); else if (t.value === "__all") go("home"); else if (t.value) A.openBrand({ id: t.value }); }
   if (t.dataset && t.dataset.sel) { const key = t.dataset.sel; if (key === "strategyStatus") return A.strategyStatus({ v: t.value }); if (key === "globe.region") return A.region({ v: t.value }); if (key.startsWith("rr.")) { S.rr[key.slice(3)] = t.value; return render(); } const [a, k] = key.split("."); if (k) S[a][k] = t.value; else S[a] = t.value; S.cell = null; render(); } });
 document.addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); palette(!$("palette").innerHTML); }
@@ -1818,7 +1938,8 @@ const G = { land: null, names: {}, status: "Loading country outlines…", pts: [
     try { const sb = new SupabaseStore(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY); const st = await sb.init(); store = sb; S.needsSignIn = !st.ready; } catch (e) { S.bootError = e.message || String(e); }
   }
   try { if (!S.needsSignIn) { await loadAll(); const stale = S.db.brands.filter(x => x.is_demo && x.demo_version !== DEMO_VERSION); if (stale.length) { for (const x of stale) await store.remove("brands", x.id); const d = await seedDemo(); S.brandId = d.id; await loadAll(); } } } catch (e) { S.bootError = "Could not load data: " + (e.message || e); }
-  S.loading = false; const r = location.hash.slice(1); if (V[r] && r !== "run") S.route = r; else if (brand()) S.route = "brand";
+  await detectEngine();
+  S.loading = false; const r = location.hash.slice(1); if (V[r] && !["run", "review"].includes(r)) S.route = r; else if (brand()) S.route = "brand";
   render(); G.load();
 })();
 </script>

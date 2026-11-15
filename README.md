@@ -131,6 +131,50 @@ fills in.
 **Handoff.** "Develop growth strategy" passes the opportunity, its market, its audience and its
 success metric into the strategy builder, and stops there.
 
+## Automatic brand research
+
+Give the engine a name, a website and a category and it fills the brand profile itself: it reads
+the brand's own pages, researches the category from outside sources, and files everything as
+**candidates**. Nothing it finds enters the profile until a person confirms it on the review
+screen — confirm, edit or reject each claim, then continue to Competitive Intelligence.
+
+The engine is `api/research.js` in this repository, a serverless function. It cannot run in the
+browser: a browser is not allowed to read another company's site, and an API key cannot live in a
+page anyone can view.
+
+**To turn it on**
+
+1. Deploy this repository (the function deploys with it).
+2. Set `ANTHROPIC_API_KEY` in the host's environment variables.
+3. Reload the app. It asks `/api/research` whether it is configured and says so on screen; nothing
+   is assumed either way.
+
+| Variable | Required | What it does |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | yes | Lets the engine run. Without it the app shows the engine as not connected. |
+| `RESEARCH_MODEL` | no | Model to use. Defaults to `claude-sonnet-4-5`. |
+| `RESEARCH_WEB_SEARCH` | no | Set to `0` to read the brand's site only and skip external research. |
+
+**What a run does**, in order: reads `robots.txt` and obeys it; reads the homepage and up to five
+more pages (about, product, pricing, FAQ, contact) found by their links; takes what the brand says
+about itself with the sentence it came from; researches the category externally with links and
+dates; names competitors as candidates; files signals with their sources and limits. It stops
+short of framing opportunities — those are framed by a person from this evidence.
+
+**What it will not do**: invent a fact to fill a gap, state a market size, share or growth rate,
+return a source it did not open, decide that a company is your competitor, or treat its own reading
+as confirmed. An empty field is a correct answer and is shown as a gap.
+
+Every record is written as it arrives, so a run that is cut short — a host timeout, a page that will
+not load — still leaves everything it found up to that point, and says where it stopped. `vercel.json`
+asks for a 300-second limit; your plan may cap it lower.
+
+**A second run never undoes your decisions.** A claim you confirmed or rejected is left alone; a
+candidate still waiting is refreshed in place rather than duplicated.
+
+**Without the engine** the app says so plainly and falls back to the six-step onboarding, prefilled
+with whatever you typed. It never fabricates a profile to fill the gap.
+
 ## Running it
 
 Open `index.html` in a browser. Data is saved in that browser's local storage, so it survives a
@@ -193,7 +237,7 @@ which has RLS enabled and no policies, so only the server-side service role can 
 
 Working in the browser today:
 
-- Guided onboarding in five groups, one question at a time, with autosave, skip, back, edit and resume.
+- Guided onboarding in six steps, one question at a time, with autosave, skip, back, edit and resume.
 - Competitive positioning and white-space maps: configurable dimensions, drag to reposition, territory analysis.
 - The globe: rotation, zoom, region and country selection, signal filters, detail panels.
 - Brand profile with provenance on every claim, and protection of user-confirmed answers.
@@ -206,16 +250,22 @@ Simulated, and labelled as such in the interface:
 - Everything about AURELIA, including its sources and global signals.
 - The Meta figures and the Meta connect/disconnect control. No request is sent to Meta.
 
-Not built — each needs a server:
+Working once the engine is deployed (`api/research.js`, needs `ANTHROPIC_API_KEY`):
 
-- Website reading and AI extraction; competitor, market and global signal research.
+- Reading the brand's own site, within robots.txt, and extracting what it says with the sentence it came from.
+- Researching the category and market from outside sources, with links and dates.
+- Proposing competitors as candidates and filing signals as evidence.
+- The review screen where all of it is confirmed, edited or rejected before it joins the profile.
+
+Not built — each needs more than this:
+
 - Automatic generation of opportunities, messaging or recommendations.
 - Meta OAuth, token storage and Ads Insights sync.
 - Supabase sign-in, workspaces, roles and isolation between organisations (the schema is written; the app code is in place but untested against a live project).
 - File storage for brand assets.
 
-Credentials still required: a Supabase project URL and publishable key, a model provider API key
-(server-side), a search or crawling provider, and a Meta app ID and secret with `ads_read` approved.
+Credentials still required: a Supabase project URL and publishable key, `ANTHROPIC_API_KEY` for
+the research engine, and a Meta app ID and secret with `ads_read` approved.
 
 ## Conventions this product keeps
 
