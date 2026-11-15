@@ -23,7 +23,19 @@ and filters beside it, and the intelligence canvas on the right.
 Open `index.html` in a browser. Data is saved in that browser's local storage, so it survives a
 refresh but exists only on that device.
 
-To put it online, any static host works:
+### Live deployment
+
+`main` is connected to the Vercel project **noetis-intelligence-app**, so every push to `main`
+deploys to production automatically:
+
+<https://noetis-intelligence-app.vercel.app>
+
+Vercel Authentication is on, so the URL asks for a sign-in to the Noetis Vercel team. Turn it off in
+the project's Deployment Protection settings when the app is ready to show someone outside it.
+
+### Other hosts
+
+Any static host works:
 
 - **GitHub Pages** — Settings → Pages → deploy from `main`, folder `/`.
 - **Vercel** — import the repository; no framework preset or build command is needed.
