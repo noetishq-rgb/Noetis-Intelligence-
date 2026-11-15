@@ -12,7 +12,7 @@ and no dependencies to install. Open it in a browser, or host it anywhere that s
 | --- | --- |
 | **Brand & Market Intelligence** | What do we actually know, and how do we know it? Nine sections — overview, website intelligence, brand DNA, business model, products and services, audience, positioning, market intelligence, sources and evidence — every claim carrying its source, excerpt, confidence and verification status. |
 | **Competitive Intelligence** | Where does the brand stand? Competitor discovery, directory and profiles, positioning map, white-space and coverage analysis, side-by-side comparison, a filterable signal feed and an interactive globe. |
-| **Opportunity Signals** | Where could the brand move next? Brand position, market and competitive change, underserved needs, opportunities with linked evidence, an impact-against-feasibility matrix. |
+| **Opportunity Signals** | Where could the brand move next? Emerging signals, an opportunity feed in six categories, a transparent five-dimension assessment, a drag-to-reassess prioritisation matrix, validation experiments and a handoff to Growth Strategy. |
 | **Growth Strategy** | How do we act on it? A strategy builder that starts from an accepted opportunity, a twelve-part strategy canvas, and a Meta workspace. |
 
 Every screen uses the same architecture: global navigation on the far left, the module's controls
@@ -90,6 +90,46 @@ the records rather than writing one.
 
 **The globe** plots located signals, rotates, zooms, and takes a country search or a region filter;
 selecting a region reports what is on file there and which competitors list that market.
+
+## Module 03 — Opportunity Signals
+
+Turns what the first two modules found into decisions. Every opportunity carries the evidence it
+rests on, and nothing moves on its own.
+
+**Categories.** Six: consumer, product and service, market, competitive, marketing and growth, and
+technology and industry, each with its own types. Filter by category, type, geography, audience,
+product, impact, feasibility, urgency, evidence confidence, horizon and status, search across them,
+and sort by team priority, composite score, date or any single assessment.
+
+**States.** New, investigating, prioritised, accepted, in progress, completed, parked and rejected —
+each with its own colour on the card and on the matrix, so they never look equally important. Every
+change of state is recorded with a reason, an author and a time, and nothing enters execution
+without a person.
+
+**The detail view** answers nine questions in order: what the opportunity is, why now, the
+supporting signals grouped by where they came from, customer relevance (segment, need, unresolved
+problem, why they might respond), competitive context (who addresses it, what is missing,
+differentiation or expansion), brand fit as a checklist against the profile plus capabilities and
+risks, potential impact by area — with no revenue figure, because nothing on file supports one —
+the recommended next step, and the validation plan.
+
+**Assessment is five separate dimensions**, never one mysterious score: potential impact,
+feasibility, strategic fit and urgency are your team's judgement with the reasoning stored beside
+each; evidence confidence is counted from the linked evidence by a stated rule. A composite is
+offered only as a plain weighted mean, with its formula printed and the weights editable on the
+left. An opportunity missing any assessment, or with no evidence linked, is marked **insufficiently
+assessed** and is not scored or placed at all.
+
+**The matrix** plots impact against feasibility on the same three-step scale the assessments use —
+no finer scale is implied. Drag a disc into another cell and it changes that judgement; disc size is
+urgency, outline colour is status, a dashed outline means thin or absent evidence.
+
+**Validation experiments** carry hypothesis, target audience, the experiment, resources, timeframe,
+success metric and the decision criteria — written before the result, which only a person ever
+fills in.
+
+**Handoff.** "Develop growth strategy" passes the opportunity, its market, its audience and its
+success metric into the strategy builder, and stops there.
 
 ## Running it
 

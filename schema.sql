@@ -191,24 +191,43 @@ create table opportunities (
   workspace_id uuid not null references workspaces(id) on delete cascade,
   brand_id uuid not null references brands(id) on delete cascade,
   name text not null,
-  noticed text not null default '',
-  why_now text not null default '',
-  affects text not null default '',
-  action text not null default '',
+  noticed text not null default '',                 -- A. what the opportunity is
+  why_now text not null default '',                 -- B. what has changed
+  affects text not null default '',                 -- D. the audience segment
+  need text not null default '',                    -- D. the customer need
+  problem text not null default '',                 -- D. what stays unresolved
+  why_respond text not null default '',             -- D. why they might respond
+  competitive_context text not null default '',     -- E. who addresses it today
+  missing text not null default '',                 -- E. what existing offers lack
+  expansion text not null default '',               -- E. differentiation | market expansion
+  brand_relevance text not null default '',         -- F. why it fits this brand
+  capabilities text not null default '',            -- F. what would be needed
+  risks text not null default '',                   -- F. what could go wrong
+  impact_areas text not null default '',            -- G. revenue, acquisition, retention, ...
+  impact_note text not null default '',             -- G. how, in words. No revenue figures.
+  action text not null default '',                  -- H. the recommended next step
   assumptions text not null default '',
   type text not null default '',
-  competitive_context text not null default '',
-  brand_relevance text not null default '',
+  category text not null default '',                -- consumer|product|market|competitive|growth|tech
+  geography text not null default '',
+  product text not null default '',
+  relevance text not null default 'Medium' check (relevance in ('Low','Medium','High')),
   owner text not null default '',
   rank int,                                         -- team priority, set by people only
   experiment text not null default '',
   metric text not null default '',
-  impact text not null default 'Medium' check (impact in ('Low','Medium','High')),
-  effort text not null default 'Medium' check (effort in ('Low','Medium','High')),
-  urgency text not null default 'Medium' check (urgency in ('Low','Medium','High')),
-  fit text not null default 'Medium' check (fit in ('Low','Medium','High')),
+  -- The four judgements, each with the reasoning stored beside it. Empty means not yet assessed:
+  -- an unassessed opportunity is never scored, and nothing fills one in.
+  impact text not null default '' check (impact in ('','Low','Medium','High')),
+  impact_why text not null default '',
+  effort text not null default '' check (effort in ('','Low','Medium','High')),
+  effort_why text not null default '',
+  urgency text not null default '' check (urgency in ('','Low','Medium','High')),
+  urgency_why text not null default '',
+  fit text not null default '' check (fit in ('','Low','Medium','High')),
+  fit_why text not null default '',
   horizon text not null default 'Now' check (horizon in ('Now','Next','Later')),
-  status text not null default 'proposed' check (status in ('proposed','accepted','parked','rejected')),
+  status text not null default 'proposed' check (status in ('proposed','investigating','prioritised','accepted','in_progress','completed','parked','rejected')),
   origin text not null default 'user' check (origin in ('user','ai','demo')),
   decision_reason text,
   decided_by text,
@@ -243,6 +262,37 @@ create table opportunity_evidence (
   signal_id uuid not null references market_signals(id) on delete cascade,
   created_at timestamptz not null default now(),
   unique (opportunity_id, signal_id)
+);
+
+-- A validation experiment for one opportunity. Decision criteria are written before the result,
+-- and a result is only ever entered by a person.
+create table experiments (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  brand_id uuid not null references brands(id) on delete cascade,
+  opportunity_id uuid not null references opportunities(id) on delete cascade,
+  hypothesis text not null,
+  audience text not null default '',
+  experiment text not null default '',
+  resources text not null default '',
+  timeframe text not null default '',
+  metric text not null default '',
+  criteria text not null default '',
+  status text not null default 'Planned' check (status in ('Planned','Running','Concluded','Abandoned')),
+  result text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz
+);
+
+create table opportunity_notes (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  brand_id uuid not null references brands(id) on delete cascade,
+  opportunity_id uuid not null references opportunities(id) on delete cascade,
+  body text not null,
+  author text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz
 );
 
 create table strategies (
@@ -329,6 +379,8 @@ create index on audience_profiles (brand_id);
 create index on competitors (brand_id);
 create index on market_signals (brand_id);
 create index on market_signals (competitor_id);
+create index on experiments (opportunity_id);
+create index on opportunity_notes (opportunity_id);
 create index on research_requests (brand_id);
 create index on opportunities (brand_id);
 create index on opportunity_evidence (opportunity_id);
@@ -346,7 +398,7 @@ create policy "members read memberships" on workspace_members for select using (
 do $$
 declare t text;
 begin
-  foreach t in array array['brands','brand_profile_items','products_services','audience_profiles','competitors','market_signals','opportunities','opportunity_evidence','strategies','research_requests'] loop
+  foreach t in array array['brands','brand_profile_items','products_services','audience_profiles','competitors','market_signals','opportunities','opportunity_evidence','experiments','opportunity_notes','strategies','research_requests'] loop
     execute format('alter table %I enable row level security', t);
     execute format('create policy "members read" on %I for select using (is_member(workspace_id))', t);
     execute format('create policy "editors insert" on %I for insert with check (can_edit(workspace_id))', t);
