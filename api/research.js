@@ -48,7 +48,7 @@ const SEARCH_USES = Math.max(0, Math.min(12, Number(process.env.RESEARCH_SEARCH_
 const WEB_SEARCH_TOOL = "web_search_20250305"; // change if Anthropic ships a newer server tool
 const UA = "NoetisIntelligenceBot/1.0 (brand research; contact the site owner's analytics team)";
 const MAX_PAGES = Math.max(1, Math.min(14, Number(process.env.RESEARCH_MAX_PAGES || 8)));
-const PAGE_BYTES = 900_000, PAGE_CHARS = 9000, FETCH_MS = 15_000, SITEMAP_CAP = 400;
+const PAGE_BYTES = 6_000_000, PAGE_CHARS = 9000, FETCH_MS = 15_000, SITEMAP_CAP = 400;
 
 /* What a page looks like it is, judged from its real URL and link text. Nothing is assumed to
    exist: these only classify URLs the site actually publishes. */
@@ -96,16 +96,20 @@ function siteUrl(website) {
   try { return new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw); } catch { return null; }
 };
 
-async function get(url, { timeout = FETCH_MS } = {}) {
+/* accept: "html" for pages, "xml" for sitemaps. A big page is truncated, never refused: the
+   first megabyte of a page carries everything we read from it. */
+async function get(url, { timeout = FETCH_MS, accept = "html" } = {}) {
   const ac = new AbortController(), t = setTimeout(() => ac.abort(), timeout);
+  const okType = accept === "xml" ? /xml|text\/plain/i : /text\/html|text\/plain|application\/xhtml|xml/i;
   try {
-    const res = await fetch(url, { signal: ac.signal, redirect: "follow", headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml,text/plain;q=0.9" } });
+    const res = await fetch(url, { signal: ac.signal, redirect: "follow", headers: { "User-Agent": UA,
+      Accept: accept === "xml" ? "application/xml,text/xml;q=0.9,*/*;q=0.5" : "text/html,application/xhtml+xml,text/plain;q=0.9" } });
     const type = res.headers.get("content-type") || "";
     if (!res.ok) return { ok: false, status: res.status, reason: `answered ${res.status}` };
-    if (!/text\/html|text\/plain|application\/xhtml/i.test(type)) return { ok: false, status: res.status, reason: `is ${type.split(";")[0] || "not a web page"}` };
+    if (type && !okType.test(type)) return { ok: false, status: res.status, reason: `is ${type.split(";")[0] || "not a web page"}` };
     const buf = await res.arrayBuffer();
-    if (buf.byteLength > PAGE_BYTES) return { ok: false, status: res.status, reason: "is too large to read" };
-    return { ok: true, status: res.status, url: res.url, html: new TextDecoder("utf-8").decode(buf) };
+    const slice = buf.byteLength > PAGE_BYTES ? buf.slice(0, PAGE_BYTES) : buf;
+    return { ok: true, status: res.status, url: res.url, truncated: buf.byteLength > PAGE_BYTES, html: new TextDecoder("utf-8").decode(slice) };
   } catch (e) {
     return { ok: false, reason: e.name === "AbortError" ? "timed out" : (e.message || "could not be reached") };
   } finally { clearTimeout(t); }
@@ -120,7 +124,7 @@ async function robots(origin) {
     const line = raw.split("#")[0].trim(); if (!line) continue;
     const [kRaw, ...rest] = line.split(":"); const k = kRaw.trim().toLowerCase(), v = rest.join(":").trim();
     if (k === "user-agent") inStar = v === "*";
-    else if (k === "sitemap" && v) sitemaps.push(v);
+    else if (k === "sitemap" && v && !sitemaps.includes(v)) sitemaps.push(v);
     else if (inStar && (k === "allow" || k === "disallow") && v) rules.push({ allow: k === "allow", path: v });
   }
   return { rules, sitemaps, fetched: true };
@@ -132,7 +136,7 @@ async function sitemapUrls(base, declared) {
   const read = async (u, depth) => {
     if (tried.has(u) || tried.size > 6 || urls.length > SITEMAP_CAP) return;
     tried.add(u);
-    const r = await get(u, { timeout: 8000 });
+    const r = await get(u, { timeout: 8000, accept: "xml" });
     if (!r.ok) { notes.push(`${u.split("/").pop()} ${r.reason}`); return; }
     const locs = [...r.html.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map(m => m[1]);
     const isIndex = /<sitemapindex/i.test(r.html);
@@ -140,7 +144,7 @@ async function sitemapUrls(base, declared) {
     for (const l of locs) { if (urls.length > SITEMAP_CAP) break; urls.push(l); }
   };
   for (const u of declared) await read(u, 0);
-  if (!urls.length) for (const u of [base.origin + "/sitemap.xml", base.origin + "/sitemap_index.xml"]) await read(u, 0);
+  if (!urls.length) for (const u of [base.origin + "/sitemap.xml", base.origin + "/sitemap_index.xml", base.origin + "/sitemap-index.xml"]) await read(u, 0);
   return { urls, note: urls.length ? "" : notes.slice(0, 1).join("") };
 }
 
