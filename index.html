@@ -34,6 +34,7 @@ main{padding:28px 28px 110px;max-width:1360px;margin:0 auto;display:flex;flex-di
 .go{min-height:44px;padding:0 20px;border-radius:8px;border:0;background:var(--butter);color:#090909;font-weight:600;transition:background .15s}
 .go:hover{background:var(--ink)}.go:disabled{background:var(--s3);color:var(--muted);cursor:not-allowed}
 .ghost,.pill{min-height:44px;padding:0 14px;border-radius:8px;border:1px solid var(--line2);background:transparent;font-weight:500;transition:background .15s,border-color .15s}
+a.pill{display:inline-flex;align-items:center;color:var(--ink);text-decoration:none}
 .ghost:hover,.pill:hover{background:var(--s2);border-color:var(--muted)}
 .pill{min-height:34px;padding:0 12px;font-size:13.5px}.pill.on{background:var(--butter);color:#090909;border-color:var(--butter)}
 .link{min-height:32px;padding:0;border:0;background:none;font-weight:500;color:var(--butter);text-decoration:underline;text-underline-offset:4px;text-align:left}
@@ -706,7 +707,7 @@ const V = {
   },
   run() {
     const r = S.run; if (!r) return emptyState("No discovery run in progress", "Add a brand to start one.", "nav", "quick", "Add a brand");
-    const running = r.status === "running", jobState = S.job || (b && b.job_state) || "";
+    const running = r.status === "running", rb = find("brands", r.brandId), jobState = S.job || (rb && rb.job_state) || "";
     const stages = STAGES.map((label, i) => { const lines = r.log.filter(l => l.stage === i), skipped = lines.length && lines.every(l => l.kind === "skip");
       const state = i > r.stage || (!lines.length && !running) ? "Queued" : i === r.stage && running ? "Working…" : skipped ? "Skipped" : "Done";
       return `<div style="opacity:${state === "Queued" ? .45 : 1}"><div class="row between" style="margin-bottom:8px"><span style="font-weight:600">${i + 1} · ${label}</span><span class="small" style="color:${skipped ? "var(--warn)" : "var(--muted)"}">${state}</span></div><div class="bar"><i style="width:${state === "Queued" ? 0 : state === "Working…" ? 55 : 100}%;background:${skipped ? "var(--warn)" : "var(--ink)"}"></i></div></div>`; }).join("");

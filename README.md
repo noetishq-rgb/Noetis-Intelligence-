@@ -138,12 +138,31 @@ NOETIS reads the brand's own pages, researches the category from outside sources
 with a brand intelligence report written for the founder: *Here's what we understood about X*.
 Nothing it finds enters the profile until a person confirms it.
 
+**Pages are discovered, never guessed.** The engine reads `robots.txt` and obeys it, follows the
+sitemaps the site declares (including sitemap indexes), adds the homepage's own internal links,
+drops login, cart, checkout, policy and pagination URLs, classifies what is left by what the URL
+actually is, and reads a spread of the best few. No path like `/about` is ever assumed to exist —
+on superyou.in it finds `/pages/about` and `/pages/faqs`, which is the point. A site served at
+`www.` and linked at the apex is treated as one site. Every page attempted is stored with its real
+URL, title, status, character count, how it was found and when, including the ones that failed, and
+each has **View source** and **Retry** beside it.
+
+**Pages that build themselves in the browser** return a shell and no words to a plain fetch. The
+engine marks those as almost empty rather than pretending to have read them, and if
+`FIRECRAWL_API_KEY` is set it retries them through a renderer first.
+
 **The run** moves through eight stages that reflect real work: accessing the website, understanding
 products and services, analysing the business model, researching the audience, analysing
 positioning, exploring market context, reviewing public marketing presence, synthesising. A stage
 that found nothing says so; a page that could not be read is listed as unread, not analysed. Five of
 the stages come from a single analysis call and complete together, and the run log says so rather
-than animating progress that is not happening.
+than animating progress that is not happening. The job's state — queued, discovering, crawling,
+gathering external research, analysing, synthesising, completed, partially completed, failed — is
+written to the brand as it is reached, so leaving the page and returning shows where it got to.
+
+**Both model passes return their result through a tool with a real schema**, so the API validates
+the structure instead of the engine parsing prose out of a reply. Malformed output used to lose a
+whole run; now it cannot.
 
 **The report** opens with a summary of what the business does, sells, serves, solves and claims to
 differentiate on, then eight chapters: business overview, product and value proposition, target
@@ -177,6 +196,10 @@ page anyone can view.
 | `ANTHROPIC_API_KEY` | yes | Lets the engine run. Without it the app shows the engine as not connected. |
 | `RESEARCH_MODEL` | no | Model to use. Defaults to `claude-sonnet-4-5`. |
 | `RESEARCH_WEB_SEARCH` | no | Set to `0` to read the brand's site only and skip external research. |
+| `RESEARCH_MAX_PAGES` | no | How many of the brand's pages to read. Default 8. |
+| `RESEARCH_SEARCH_USES` | no | Cap on web searches per run. Default 6; searches are billed per search. |
+| `FIRECRAWL_API_KEY` | no | Lets the engine read pages that render in the browser, instead of recording them as almost empty. |
+| `RESEARCH_TEST_TOKEN` | no | Enables `?run=…&token=…`, which runs the whole pipeline over GET and returns JSON — for verifying a deployment from outside the app. It spends model credit, so it is off unless set. |
 
 **What a run does**, in order: reads `robots.txt` and obeys it; reads the homepage and up to five
 more pages (about, product, pricing, FAQ, contact) found by their links; takes what the brand says

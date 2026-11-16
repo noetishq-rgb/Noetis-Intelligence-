@@ -32,6 +32,9 @@
      RESEARCH_WEB_SEARCH      optional, "0" turns off external research and reads only the site
      RESEARCH_SEARCH_USES     optional, cap on web searches per run. Default 6.
      RESEARCH_MAX_PAGES       optional, how many of the brand's pages to read. Default 8.
+     RESEARCH_TEST_TOKEN      optional. Set it to enable ?run=&token=, which runs the whole
+                              pipeline over GET and returns the result as JSON, for verifying a
+                              deployment from outside the app. It spends model credit.
      FIRECRAWL_API_KEY        optional. A plain fetch cannot read a page that builds itself in the
                               browser; with this set, such a page is retried through Firecrawl's
                               renderer instead of being written off as unreadable.
@@ -595,6 +598,9 @@ module.exports = async function handler(req, res) {
        outside the app. Same code path as the app uses; it just collects the events instead of
        streaming them. It does spend model credit, so it is a deliberate test, not a health check. */
     if (ready && req.query && req.query.run) {
+      /* This spends model credit, so it only works when a token is deliberately configured. */
+      if (!process.env.RESEARCH_TEST_TOKEN || req.query.token !== process.env.RESEARCH_TEST_TOKEN)
+        return res.status(403).json({ error: "Set RESEARCH_TEST_TOKEN on the deployment and pass &token= to run the pipeline over GET. The app itself uses POST." });
       const brand = { name: req.query.name || "", website: req.query.run, category: req.query.category || "", geography: req.query.geography || "" };
       const events = [], rows = {};
       const say = (stage, kind, msg, write) => { events.push({ stage, kind, msg, table: write && write.table });
