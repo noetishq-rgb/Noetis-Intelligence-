@@ -13,16 +13,34 @@
      → { engine: "noetis-research", ready, reason } so the app can tell whether it is configured
        without guessing.
 
+   Model routing: the cheapest model that can do each job.
+     pass 1  extraction    Haiku reads the raw pages and pulls out what the brand says, verbatim.
+                           This is the token-heavy step (tens of thousands of characters of page
+                           text) and it is literal work, so it goes to the cheapest model.
+     pass 2  analysis      Sonnet takes pass 1's compact result — not the raw pages — and does the
+                           reasoning: category research with web search, competitors, signals,
+                           positioning. A fraction of the input tokens of pass 1.
+     Opus is never called. Set RESEARCH_MODEL_ANALYSE if a particular brand genuinely needs it.
+   Two calls cost less here than one, because the expensive pass never sees the raw page text.
+   On a re-run the app sends what is already on file and the engine is told not to return it again.
+
    Environment:
-     ANTHROPIC_API_KEY   required
-     RESEARCH_MODEL      optional, defaults below
-     RESEARCH_WEB_SEARCH optional, "0" turns off external research and reads only the brand's site
+     ANTHROPIC_API_KEY        required
+     RESEARCH_MODEL_EXTRACT   optional, the page-reading model. Default below.
+     RESEARCH_MODEL_ANALYSE   optional, the reasoning model. Default below.
+     RESEARCH_MODEL           optional, legacy: overrides both if set.
+     RESEARCH_WEB_SEARCH      optional, "0" turns off external research and reads only the site
+     RESEARCH_SEARCH_USES     optional, cap on web searches per run. Default 6.
 
    What it will not do: invent a fact to fill a gap, state a market size or share, or return a
    source URL it did not actually retrieve. Empty is a valid answer and is filed as a gap.
 */
 
-const MODEL = process.env.RESEARCH_MODEL || "claude-sonnet-4-5";
+const MODELS = {
+  extract: process.env.RESEARCH_MODEL || process.env.RESEARCH_MODEL_EXTRACT || "claude-haiku-5-5",
+  analyse: process.env.RESEARCH_MODEL || process.env.RESEARCH_MODEL_ANALYSE || "claude-sonnet-5-5"
+};
+const SEARCH_USES = Math.max(0, Math.min(12, Number(process.env.RESEARCH_SEARCH_USES || 6)));
 const WEB_SEARCH_TOOL = "web_search_20250305"; // change if Anthropic ships a newer server tool
 const UA = "NoetisIntelligenceBot/1.0 (brand research; contact the site owner's analytics team)";
 const MAX_PAGES = 6, PAGE_BYTES = 900_000, PAGE_CHARS = 9000, FETCH_MS = 15_000;
@@ -121,81 +139,97 @@ function pickLinks(html, base) {
   return found;
 };
 
-/* ---------- the research call ---------- */
-function prompt(brand, pages) {
-  const site = pages.map(p => `### ${p.name} — ${p.url}\n${p.text || "(nothing readable)"}`).join("\n\n");
-  return `You are the research step of a marketing intelligence system. You are building the first profile of one brand.
+/* ---------- the two passes ---------- */
+async function call(model, body, label) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST", headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model, ...body })
+  });
+  if (!res.ok) { const t = await res.text(); const e = new Error(`${label} (${model}) answered ${res.status}: ${t.slice(0, 300)}`); e.status = res.status; throw e; }
+  const data = await res.json();
+  const text = (data.content || []).filter(c => c.type === "text").map(c => c.text).join("").trim();
+  const u = data.usage || {};
+  return { text, usage: { in: u.input_tokens || 0, out: u.output_tokens || 0 } };
+}
+function asJson(text, label) {
+  const a = text.indexOf("{"), b = text.lastIndexOf("}");
+  if (a < 0 || b < a) throw new Error(`${label} did not return JSON`);
+  return JSON.parse(text.slice(a, b + 1));
+}
+
+/* Pass 1 — literal extraction. No reasoning asked for, so the cheapest model does it. */
+function extractPrompt(brand, pages) {
+  return `Read these pages from one company's website and pull out only what the company says about itself. Do not interpret, do not research, do not add anything that is not on the page.
+
+COMPANY: ${brand.name} · ${brand.website}
+
+${pages.map(p => `### ${p.name} — ${p.url}\n${p.text || "(nothing readable)"}`).join("\n\n")}
+
+Return ONE JSON object, nothing else:
+{
+  "geography": "the country it operates in, only if a page says so",
+  "markets": "other countries named on the pages, comma separated",
+  "category": "how the company describes what it sells, in its own words",
+  "items": [ { "section": "dna|business|positioning|needs", "label": "", "text": "one plain sentence", "excerpt": "a short verbatim phrase from the page", "source_url": "the page URL it came from" } ],
+  "products": [ { "name": "", "category": "", "description": "", "features": "", "benefits": "", "problem": "", "pricing": "exactly as printed", "differentiator": "", "source_url": "" } ],
+  "audiences": [ { "name": "", "description": "who the company says it is for", "demographics": "only if stated", "geography": "", "motivations": "", "pains": "", "source_url": "" } ],
+  "social": "social handles or links found, comma separated"
+}
+
+RULES
+- Every item needs an excerpt copied from the page and the URL of the page it was on. No excerpt, no item.
+- Use "" for anything the pages do not say. An empty field is correct and is shown to the user as a gap.
+- Never state a market size, share, growth rate or revenue, even if a page claims one.
+- Do not write an item about competitors, the market, or trends: that is not this step.
+- Use these exact labels where the pages support them:
+${Object.entries(FIELDS).filter(([k]) => k !== "category").map(([k, l]) => `  ${k}: ${l.join(", ")}`).join("\n")}
+- Plain British English, short sentences, no marketing language.`;
+}
+
+/* Pass 2 — the reasoning. It sees pass 1's result, never the raw pages. */
+function analysePrompt(brand, ex, known) {
+  const seen = [];
+  if (known.labels && known.labels.length) seen.push(`Claims already on file (do not return these again): ${known.labels.slice(0, 60).join("; ")}`);
+  if (known.competitors && known.competitors.length) seen.push(`Competitors already on file (do not return these again): ${known.competitors.slice(0, 40).join(", ")}`);
+  if (known.sources && known.sources.length) seen.push(`Sources already used (do not return a signal from these again): ${known.sources.slice(0, 40).join(", ")}`);
+  return `You are the analysis step of a marketing intelligence system. Another model has already read the brand's own website; its extraction is below. Your job is the thinking, not the reading.
 
 BRAND
 name: ${brand.name}
 website: ${brand.website}
 category given by the user: ${brand.category || "not given"}
-market given by the user: ${brand.geography || "not given"}
+market: ${ex.geography || brand.geography || "not stated"}${ex.markets ? ` (also ${ex.markets})` : ""}
 
-PAGES RETRIEVED FROM THE BRAND'S OWN SITE
-${site || "(no page could be read)"}
+WHAT THE BRAND SAYS ABOUT ITSELF (extracted from its own pages)
+${JSON.stringify({ category: ex.category, items: (ex.items || []).map(i => ({ label: i.label, text: i.text })), products: (ex.products || []).map(p => ({ name: p.name, description: p.description, pricing: p.pricing })), audiences: (ex.audiences || []).map(a => ({ name: a.name, description: a.description })) })}
 
+${seen.length ? "ALREADY ON FILE FROM EARLIER RUNS\n" + seen.join("\n") + "\nReturn only what is new or has changed since. Repeating what is listed above wastes the user's money and their attention.\n" : ""}
 YOUR TASK
-1. Read the pages above and record what the brand itself says.
-2. Research the category and market from external sources${process.env.RESEARCH_WEB_SEARCH === "0" ? " — web search is disabled for this run, so skip this step and return no signals or competitors unless the brand's own pages name them" : " using web search. Prefer trade press, regulators, official company pages and industry bodies"}.
-3. Return ONE JSON object and nothing else. No markdown fence, no commentary.
+${process.env.RESEARCH_WEB_SEARCH === "0" ? "External research is switched off for this run. Use only the extraction above. Return no signals and no competitors unless the extraction names them." : `Research this category and market with web search (at most ${SEARCH_USES} searches — choose them well). Prefer trade press, regulators, official company pages and industry bodies.`}
+Then return ONE JSON object and nothing else.
 
 RULES THAT MATTER MORE THAN COMPLETENESS
-- Never invent. If something is not on the pages and not in a source you actually retrieved, return "" for it. An empty field is a correct answer and is shown to the user as a gap.
-- Never state a market size, market share, growth rate, revenue, or company size. Not even "approximately". Leave them out entirely.
-- provenance must be exactly one of: "brand_stated" (the brand's own site says it), "observed" (an external source you retrieved says it), "ai_inferred" (your reading of the evidence, no single source states it).
-- Every "brand_stated" item needs an "excerpt": a short verbatim phrase from the page, and a source_url that is one of the page URLs above.
-- Every "observed" item needs a real source_url you actually retrieved, and published_at where the source shows a date. Never write a URL you did not open.
-- "ai_inferred" items must have source_url "" and confidence "Low" or "Medium". Do not dress up a guess as a finding.
-- Audiences: an audience the brand says it is for is kind "intended". Do NOT return an "observed" audience: who actually buys can only come from the company's own customer data, which you do not have.
-- Competitors: only companies you can name from a source. Each is a candidate for the user to judge, never a confirmed competitor.
-- Write in plain British English, in short declarative sentences. No marketing language, no adjectives doing work facts should do.
+- Never invent. If you did not retrieve a source for it, do not write it.
+- Never state a market size, market share, growth rate, revenue or company size. Not even approximately.
+- provenance: "observed" means a source you actually opened says it, and needs a real source_url. "ai_inferred" means your reading of the evidence, must have source_url "" and confidence "Low" or "Medium".
+- Do not return an "observed" audience: who actually buys can only come from the company's own customer data, which you do not have.
+- Competitors are candidates for the user to judge, never confirmed. Only name a company a source names.
+- Plain British English, short declarative sentences.
 
 JSON SHAPE
 {
-  "brand": { "geography": "primary country of operation, if the site shows it", "markets": "other markets, comma separated", "category": "the category in the brand's own terms, if clearer than the one given" },
-  "items": [ { "section": "dna|business|positioning|needs|category", "label": "", "text": "", "excerpt": "", "provenance": "", "confidence": "Low|Medium|High", "source_url": "" } ],
-  "products": [ { "name": "", "category": "", "description": "", "features": "", "benefits": "", "problem": "", "pricing": "", "differentiator": "", "provenance": "", "source_url": "" } ],
-  "audiences": [ { "kind": "intended", "name": "", "description": "", "demographics": "", "geography": "", "motivations": "", "pains": "", "triggers": "", "objections": "", "behaviour": "", "provenance": "", "source_url": "" } ],
+  "items": [ { "section": "category|positioning|needs", "label": "", "text": "", "provenance": "observed|ai_inferred", "confidence": "Low|Medium|High", "source_url": "", "excerpt": "" } ],
   "competitors": [ { "name": "", "website": "", "kind": "Direct|Indirect|Emerging|Adjacent", "note": "why it competes with this brand", "why": "why you are proposing it", "positioning": "", "value_prop": "", "offering": "", "pricing": "", "audience": "", "messaging": "", "distribution": "", "differentiation": "", "strengths": "", "weaknesses": "", "hq": "", "markets": "", "source_url": "" } ],
-  "signals": [ { "kind": "shift|signal|crowded|gap", "category": "consumer|competitor|category|product|regulatory", "event": "", "text": "what is happening, one sentence", "implication": "why it matters", "affects": "what it affects", "brand_meaning": "what it could mean for this brand", "excerpt": "", "source_type": "Press|Website|Report|Regulator|Review site|Forum|Other", "source_url": "", "published_at": "YYYY-MM-DD", "country": "", "confidence": "Low|Medium|High", "relevance": "Low|Medium|High", "limits": "what this evidence cannot tell us" } ]
-};
+  "signals": [ { "kind": "shift|signal|crowded|gap", "category": "consumer|competitor|category|product|regulatory", "event": "", "text": "what is happening, one sentence", "implication": "why it matters", "affects": "", "brand_meaning": "what it could mean for this brand", "excerpt": "", "source_type": "Press|Website|Report|Regulator|Review site|Forum|Other", "source_url": "", "published_at": "YYYY-MM-DD", "country": "", "confidence": "Low|Medium|High", "relevance": "Low|Medium|High", "limits": "what this evidence cannot tell us" } ]
+}
 
-USE THESE EXACT LABELS where you have something to say; they are the rows of the user's brand profile. Skip any you cannot support.
-${Object.entries(FIELDS).map(([s, l]) => `${s}: ${l.join(", ")}`).join("\n")}
+Use these exact labels where you have something to support:
+  category: ${FIELDS.category.join(", ")}
+  positioning: ${FIELDS.positioning.join(", ")}
+  needs: ${FIELDS.needs.join(", ")}
 
-Aim for quality over volume: 12 to 25 items, 0 to 8 products, 1 to 3 intended audiences, 0 to 8 competitors, 0 to 10 signals. Return the JSON object only.`;
-};
-
-async function research(brand, pages, say) {
-  const key = process.env.ANTHROPIC_API_KEY;
-  const body = {
-    model: MODEL, max_tokens: 8000,
-    messages: [{ role: "user", content: prompt(brand, pages) }]
-  };
-  const useSearch = process.env.RESEARCH_WEB_SEARCH !== "0";
-  if (useSearch) body.tools = [{ type: WEB_SEARCH_TOOL, name: "web_search", max_uses: 8 }];
-
-  let res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST", headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" }, body: JSON.stringify(body)
-  });
-  if (!res.ok && useSearch && res.status === 400) {
-    const detail = await res.text();
-    say(1, "warn", "External research is unavailable on this account, so only the brand's own site was read.");
-    delete body.tools;
-    res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" }, body: JSON.stringify(body)
-    });
-    if (!res.ok) throw new Error(`the model API answered ${res.status}: ${(detail || "").slice(0, 300)}`);
-  }
-  if (!res.ok) throw new Error(`the model API answered ${res.status}: ${(await res.text()).slice(0, 300)}`);
-
-  const data = await res.json();
-  const text = (data.content || []).filter(c => c.type === "text").map(c => c.text).join("").trim();
-  const start = text.indexOf("{"), end = text.lastIndexOf("}");
-  if (start < 0 || end < start) throw new Error("the model did not return JSON");
-  return JSON.parse(text.slice(start, end + 1));
-};
+Aim for 6 to 14 items, 0 to 8 competitors, 0 to 10 signals. Quality over volume. Return the JSON object only.`;
+}
 
 /* ---------- validation: anything that cannot be checked is dropped, not patched ---------- */
 const PROV = ["brand_stated", "observed", "ai_inferred"], CONF = ["Low", "Medium", "High"];
@@ -214,8 +248,18 @@ function cleanItem(r, pageUrls) {
 module.exports = async function handler(req, res) {
   if (req.method === "GET" || req.method === "HEAD") {
     const ready = !!process.env.ANTHROPIC_API_KEY;
-    return res.status(200).json({ engine: "noetis-research", ready, model: MODEL,
-      webSearch: process.env.RESEARCH_WEB_SEARCH !== "0",
+    /* ?check=models — one token to each routed model, to confirm this account can call them.
+       Costs next to nothing and is the honest way to find out before a real run. */
+    if (ready && req.query && req.query.check === "models") {
+      const out = {};
+      for (const [job, model] of Object.entries(MODELS)) {
+        try { await call(model, { max_tokens: 1, messages: [{ role: "user", content: "ok" }] }, job); out[job] = { model, ok: true }; }
+        catch (e) { out[job] = { model, ok: false, error: String(e.message || e).slice(0, 200) }; }
+      }
+      return res.status(200).json({ engine: "noetis-research", check: "models", routing: out });
+    }
+    return res.status(200).json({ engine: "noetis-research", ready, model: MODELS.analyse, models: MODELS, searchUses: SEARCH_USES,
+      webSearch: process.env.RESEARCH_WEB_SEARCH !== "0" && SEARCH_USES > 0,
       reason: ready ? "" : "ANTHROPIC_API_KEY is not set on this deployment, so the engine cannot run." });
   }
   if (req.method !== "POST") return res.status(405).json({ error: "POST a brand to run discovery." });
@@ -255,9 +299,35 @@ module.exports = async function handler(req, res) {
     }
     if (pages.length === 1) say(0, "warn", "only the homepage could be read, so the profile will be thin");
 
-    /* ---- stage 1: profile ---- */
-    say(1, "ok", process.env.RESEARCH_WEB_SEARCH === "0" ? "building the profile from the site alone (external research is off)" : "reading the pages and researching the category");
-    const out = await research(brand, pages, say);
+    /* ---- stage 1: read the pages (cheap model), then think about them (better model) ---- */
+    const chars = pages.reduce((t, p) => t + p.text.length, 0);
+    say(1, "ok", `reading ${chars.toLocaleString()} characters with ${MODELS.extract} — the cheapest model that can do literal extraction`);
+    const ex = asJson((await call(MODELS.extract, { max_tokens: 6000, messages: [{ role: "user", content: extractPrompt(brand, pages) }] }, "extraction")).text, "extraction");
+
+    const known = (req.body && req.body.known) || {};
+    say(1, "ok", process.env.RESEARCH_WEB_SEARCH === "0"
+      ? `analysing with ${MODELS.analyse} · external research is off, so the site alone`
+      : `analysing with ${MODELS.analyse} · up to ${SEARCH_USES} web searches${known.labels && known.labels.length ? ` · ${known.labels.length} claims already on file are excluded` : ""}`);
+    const aBody = { max_tokens: 8000, messages: [{ role: "user", content: analysePrompt(brand, ex, known) }] };
+    if (process.env.RESEARCH_WEB_SEARCH !== "0" && SEARCH_USES > 0) aBody.tools = [{ type: WEB_SEARCH_TOOL, name: "web_search", max_uses: SEARCH_USES }];
+    let an;
+    try { an = asJson((await call(MODELS.analyse, aBody, "analysis")).text, "analysis"); }
+    catch (e) {
+      if (e.status !== 400 || !aBody.tools) throw e;
+      say(1, "warn", "external research is unavailable on this account, so the profile is built from the site alone");
+      delete aBody.tools;
+      an = asJson((await call(MODELS.analyse, aBody, "analysis")).text, "analysis");
+    }
+
+    /* Pass 1 says only what the brand says; pass 2 adds what the world says. */
+    const out = {
+      brand: { geography: ex.geography, markets: ex.markets, category: ex.category },
+      items: [...(ex.items || []).map(i => ({ ...i, provenance: "brand_stated", confidence: "High" })), ...(an.items || [])],
+      products: (ex.products || []).map(p => ({ ...p, provenance: "brand_stated" })),
+      audiences: (ex.audiences || []).map(a => ({ ...a, kind: "intended", provenance: "brand_stated" })),
+      competitors: an.competitors || [], signals: an.signals || []
+    };
+    if (ok(ex.social)) out.items.push({ section: "business", label: "Social presence", text: ex.social, provenance: "brand_stated", confidence: "High", source_url: pages[0].url, excerpt: "" });
     const pageUrls = pages.map(p => p.url);
 
     const bUpd = {};
@@ -320,6 +390,7 @@ module.exports = async function handler(req, res) {
 
     /* ---- stage 4 ---- */
     say(4, "skip", "Opportunities are framed by a person from this evidence. Nothing is framed automatically.");
+    say(4, "ok", `routing: ${MODELS.extract} read the pages, ${MODELS.analyse} did the analysis. Opus was not used.`);
     res.end();
   } catch (e) {
     say(0, "warn", `Run failed: ${e.message || e}`);

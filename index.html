@@ -219,7 +219,14 @@ async function* ManualEngine(brand) {
 
 // Real engine: POSTs the brand to your endpoint and reads newline-delimited JSON events back.
 async function* RemoteEngine(brand) {
-  const res = await fetch(CONFIG.RESEARCH_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brand }) });
+  /* What is already on file goes with the request, so a second run is not charged for work the
+     first one did. The engine is told to return only what is new or has changed. */
+  const f = facts(brand.id), known = {
+    labels: f.items.filter(i => i.status !== "rejected").map(i => `${i.label}: ${String(i.text).slice(0, 60)}`),
+    competitors: f.comps.map(c => c.name),
+    sources: [...new Set(f.signals.map(s => s.source_url).filter(Boolean))]
+  };
+  const res = await fetch(CONFIG.RESEARCH_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brand, known }) });
   if (!res.ok || !res.body) throw new Error(`Discovery endpoint answered ${res.status}`);
   const reader = res.body.getReader(), dec = new TextDecoder(); let buf = "";
   for (;;) { const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); const lines = buf.split("\n"); buf = lines.pop(); for (const line of lines) if (line.trim()) yield JSON.parse(line); }
@@ -235,14 +242,16 @@ async function detectEngine() {
     if (!res.ok) return;
     const j = await res.json();
     if (!j || j.engine !== "noetis-research") return;
-    ENGINE.found = true; ENGINE.ready = !!j.ready; ENGINE.model = j.model || ""; ENGINE.webSearch = !!j.webSearch; ENGINE.reason = j.reason || "";
+    ENGINE.found = true; ENGINE.ready = !!j.ready; ENGINE.model = j.model || ""; ENGINE.models = j.models || null; ENGINE.searchUses = j.searchUses; ENGINE.webSearch = !!j.webSearch; ENGINE.reason = j.reason || "";
     if (j.ready) CONFIG.RESEARCH_ENDPOINT = "/api/research";
   } catch (e) { /* no engine deployed, or it did not answer: the app says so rather than guessing */ }
   finally { clearTimeout(t); }
 }
-const ENGINE = { found: false, ready: false, model: "", webSearch: false, reason: "" };
+const ENGINE = { found: false, ready: false, model: "", models: null, searchUses: null, webSearch: false, reason: "" };
 const engineNote = () => CONFIG.RESEARCH_ENDPOINT ? `Connected${ENGINE.model ? " · " + ENGINE.model : ""}${ENGINE.found && !ENGINE.webSearch ? " · site only, external research off" : ""}`
   : ENGINE.found ? ENGINE.reason || "Deployed but not configured." : "Not connected.";
+/* The engine uses the cheapest model that can do each job, and says which does what. */
+const routingNote = () => !ENGINE.models ? "" : `<div class="small muted" style="margin-top:6px">Reading the pages: <span class="mono">${esc(ENGINE.models.extract)}</span>. Analysis and research: <span class="mono">${esc(ENGINE.models.analyse)}</span>${ENGINE.webSearch ? ` · up to ${ENGINE.searchUses} searches a run` : ""}. The page text never reaches the more expensive model, and a second run is told what is already on file so it is not charged for it again.</div>`;
 
 function engineFor(brand) {
   if (CONFIG.RESEARCH_ENDPOINT) return { name: "remote", run: () => RemoteEngine(brand) };
@@ -703,7 +712,10 @@ const V = {
     return `${head("Settings · data", "Where the data lives.")}${S.bootError ? `<div class="sunk" role="alert"><strong>Supabase did not connect.</strong> ${esc(S.bootError)} The app is using this browser's storage instead.</div>` : ""}
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:40px;align-items:start">
         <div class="col"><h2>${sb ? "Supabase" : "This browser"}</h2><p class="muted">${sb ? "Rows are read and written in your Supabase project, scoped to your workspace by Row Level Security." : store.persistent ? "Everything is saved in this browser's storage. It survives a refresh but exists only on this device, and other people cannot see it." : "Browser storage is unavailable here, so data lasts only until this page is closed."}</p>${auth}${sb ? "" : '<div class="row"><button class="ghost" data-act="copyData">Copy all data as JSON</button><button class="ghost" data-act="wipe">Erase local data</button></div>'}</div>
-        <div class="col"><h2>To go live</h2><ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px"><li>Run <span class="mono">schema.sql</span> in the Supabase SQL editor.</li><li>Fill <span class="mono">CONFIG.SUPABASE_URL</span> and <span class="mono">CONFIG.SUPABASE_ANON_KEY</span> at the top of this file.</li><li>Host the file on your own domain and sign in from this page.</li><li>Deploy the discovery engine: <span class="mono">api/research.js</span> ships in this repository, so deploying the repo deploys it. Set <span class="mono">ANTHROPIC_API_KEY</span> in the host's environment variables and the app finds it at <span class="mono">/api/research</span> by itself. Hosting the file on its own, without that function, leaves the engine unconnected — set <span class="mono">CONFIG.RESEARCH_ENDPOINT</span> by hand if it lives elsewhere.</li><li>Register a Meta app, add the OAuth routes, set <span class="mono">CONFIG.META_OAUTH_START_URL</span>.</li></ol><p class="small muted">Discovery engine: ${CONFIG.RESEARCH_ENDPOINT ? "endpoint set" : "not connected"}. Meta: ${CONFIG.META_OAUTH_START_URL ? "start URL set" : "not connected"}.</p></div></div>`;
+        <div class="col"><h2>To go live</h2><ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px"><li>Run <span class="mono">schema.sql</span> in the Supabase SQL editor.</li><li>Fill <span class="mono">CONFIG.SUPABASE_URL</span> and <span class="mono">CONFIG.SUPABASE_ANON_KEY</span> at the top of this file.</li><li>Host the file on your own domain and sign in from this page.</li><li>Deploy the discovery engine: <span class="mono">api/research.js</span> ships in this repository, so deploying the repo deploys it. Set <span class="mono">ANTHROPIC_API_KEY</span> in the host's environment variables and the app finds it at <span class="mono">/api/research</span> by itself. Hosting the file on its own, without that function, leaves the engine unconnected — set <span class="mono">CONFIG.RESEARCH_ENDPOINT</span> by hand if it lives elsewhere.</li><li>Register a Meta app, add the OAuth routes, set <span class="mono">CONFIG.META_OAUTH_START_URL</span>.</li></ol><p class="small muted">Discovery engine: ${esc(engineNote().toLowerCase())}. Meta: ${CONFIG.META_OAUTH_START_URL ? "start URL set" : "not connected"}.</p>${routingNote()}
+          <div class="sunk col" style="gap:4px;margin-top:10px"><div class="cap">Model routing</div>
+            <p class="small">The engine uses the cheapest model that can do each job. Reading the brand's pages is literal work on a lot of text, so it goes to the small model; the analysis sees only that result, never the raw pages. Opus is never called.</p>
+            <p class="small muted">Override per job with <span class="mono">RESEARCH_MODEL_EXTRACT</span> and <span class="mono">RESEARCH_MODEL_ANALYSE</span>. Cap searches with <span class="mono">RESEARCH_SEARCH_USES</span> (default 6), or set <span class="mono">RESEARCH_WEB_SEARCH=0</span> to read the site only.</p></div></div></div>`;
   }
 };
 const CANVAS = [["objective", "Objective", "What this strategy is meant to achieve."], ["funnel_role", "Funnel role", "Where in the journey this channel does its work."], ["audience", "Audience", "Who we are reaching here."], ["tension", "Customer tension", "The friction or doubt we are answering."], ["message", "Strategic message", "The one thing we want them to take away."], ["territories", "Creative territories", "Directions and example concepts."], ["formats", "Formats and placements", "Only what the channel actually supports."], ["testing_plan", "Distribution and testing plan", "What runs, in what order, and what we compare."], ["budget_assumptions", "Budget assumptions", "Stated as assumptions, not commitments."], ["kpi", "KPI and measurement", "What we measure and how we will read it."], ["risks", "Risks and dependencies", "What could stop this or make it misleading."], ["next_actions", "Next actions", "The first few concrete steps."]];
@@ -1243,7 +1255,7 @@ V.quick = function () {
         <div class="panel"><div class="cap">What it will not do</div>
           <p class="small">Invent a fact to fill a gap. State a market size, share or growth rate. Return a source it did not open. Decide that a company is your competitor. Treat its own reading as confirmed.</p>
           <p class="small muted">Everything it finds arrives as a candidate. You confirm, edit or reject each one.</p></div>
-        <div class="panel"><div class="cap">Engine</div><p class="small">${engineNote()}</p>${CONFIG.RESEARCH_ENDPOINT ? "" : '<button class="link small" data-act="nav" data-to="data">Deployment steps</button>'}</div></div></div>`;
+        <div class="panel"><div class="cap">Engine</div><p class="small">${engineNote()}</p>${routingNote()}${CONFIG.RESEARCH_ENDPOINT ? "" : '<button class="link small" data-act="nav" data-to="data">Deployment steps</button>'}</div></div></div>`;
 };
 
 /* The screen between a run and the profile: nothing the engine found is part of the brand's
@@ -1523,7 +1535,7 @@ V.integrations = function () {
   const b = brand(), row = (name, what, status, cls, act, to, label) => `<div class="item" style="justify-content:space-between;flex-wrap:nowrap;gap:20px"><div><div style="font-weight:600">${name}</div><div class="small muted">${what}</div></div><div class="row" style="gap:10px;flex:none">${act ? `<button class="link small" data-act="${act}" data-to="${to}">${label}</button>` : ""}<span class="tag ${cls}">${status}</span></div></div>`;
   return `${head("Integrations", "What is NOETIS connected to?")}<p class="muted" style="max-width:720px;margin-top:-12px">Nothing is shown as connected unless a real authorisation has succeeded.</p>
     <div class="col" style="gap:0"><h2 style="margin-bottom:8px">Channels</h2>${row("Meta Marketing API", "Read-only ad insights through Meta OAuth. First channel.", b && b.is_demo ? "Simulated in demo" : "Not connected", b && b.is_demo ? "ai" : "warn", "nav", "metasetup", "Requirements")}${PLANNED.map(p => row(p, "Planned. The strategy workspace accepts it; no data connection exists.", "Planned", "")).join("")}</div>
-    <div class="col" style="gap:0"><h2 style="margin-bottom:8px">Data and research</h2>${row("Database and sign-in (Supabase)", "Workspaces, roles and data isolation.", store.name === "supabase" ? "Connected" : "Not connected", store.name === "supabase" ? "ok" : "warn", "nav", "data", "Setup")}${row("Discovery engine", "Website reading, competitor and market research.", engineNote(), CONFIG.RESEARCH_ENDPOINT ? "ok" : "warn")}${row("AI services", "Extraction, opportunity discovery and strategy generation.", "Not built", "")}</div>
+    <div class="col" style="gap:0"><h2 style="margin-bottom:8px">Data and research</h2>${row("Database and sign-in (Supabase)", "Workspaces, roles and data isolation.", store.name === "supabase" ? "Connected" : "Not connected", store.name === "supabase" ? "ok" : "warn", "nav", "data", "Setup")}${row("Discovery engine", `Website reading, competitor and market research.${ENGINE.models ? ` Routed: ${esc(ENGINE.models.extract)} reads the pages, ${esc(ENGINE.models.analyse)} does the analysis.` : ""}`, engineNote(), CONFIG.RESEARCH_ENDPOINT ? "ok" : "warn")}${row("AI services", "Extraction, opportunity discovery and strategy generation.", "Not built", "")}</div>
     <p class="small muted">Each channel sits behind the same adapter interface, so adding one does not change the strategy workspace.</p>`;
 };
 
