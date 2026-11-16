@@ -129,7 +129,7 @@ const CONFIG = {
   META_OAUTH_START_URL: "",  // server route that begins Meta OAuth; tokens never reach this page
   WORLD_SCRIPT: "https://cdn.jsdelivr.net/npm/datamaps@0.5.9/dist/datamaps.world.min.js" // country outlines for the globe
 };
-const TABLES = ["brands", "brand_profile_items", "products_services", "audience_profiles", "competitors", "market_signals", "opportunities", "opportunity_evidence", "experiments", "opportunity_notes", "strategies", "research_requests", "activity_events"];
+const TABLES = ["brands", "pages", "brand_profile_items", "products_services", "audience_profiles", "competitors", "market_signals", "opportunities", "opportunity_evidence", "experiments", "opportunity_notes", "strategies", "research_requests", "activity_events"];
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(16).slice(2));
 const now = () => new Date().toISOString();
 const daysAgo = n => new Date(Date.now() - n * 864e5).toISOString();
@@ -404,7 +404,7 @@ const DEMO = {
 
 /* ---------- 4. App --------------------------------------------------- */
 let store;
-const S = { route: "home", db: {}, brandId: null, run: null, wiz: null, drawer: null, strategyId: null, chapter: "overview", evFilter: "All", evQ: "", oppFilter: "Open", oppSort: "priority", oq: "", oppGeo: "All", oppAud: "All", oppProd: "All", oppCatF: "All", oppFeas: "Any", weights: { impact: 2, feasibility: 1, fit: 1, urgency: 1, confidence: 1 }, metaLevel: "campaign", panelOpen: false, open: {}, editing: null, chapterOpen: {}, reviewAfterRun: false, quick: { name: "", website: "", category: "", geography: "", err: "" }, feedView: "open", covAll: false, cmp: [], cq: "", rq: "", ff: { comp: "All", event: "All", rel: "All" }, bq: "", saved: false, rr: { topic: "", category: "", geography: "", segment: "", period: "Last 90 days", focus: "Category structure" }, sigView: "overview", oppType: "All", sigKind: "All", metaTab: "overview", metaSim: true, sb: { opp: "", goal: "", channel: "Meta", funnel: "Consideration", market: "", budget: "", timeframe: "", measure: "" }, canvasF: { strength: "Any", urgency: "Any", horizon: "Any", impact: "Any" }, lf: { kind: "All", geo: "All", aud: "All", price: "All" }, wx: "price", wy: "approach", cell: null, globe: { lon: 78, lat: 18, zoom: 1, cat: "All", time: "All", region: "All", iso: null }, needsSignIn: false, bootError: "", loading: true };
+const S = { route: "home", db: {}, brandId: null, run: null, wiz: null, drawer: null, strategyId: null, chapter: "overview", evFilter: "All", evQ: "", oppFilter: "Open", oppSort: "priority", oq: "", oppGeo: "All", oppAud: "All", oppProd: "All", oppCatF: "All", oppFeas: "Any", weights: { impact: 2, feasibility: 1, fit: 1, urgency: 1, confidence: 1 }, metaLevel: "campaign", panelOpen: false, open: {}, job: "", editing: null, chapterOpen: {}, reviewAfterRun: false, quick: { name: "", website: "", category: "", geography: "", err: "" }, feedView: "open", covAll: false, cmp: [], cq: "", rq: "", ff: { comp: "All", event: "All", rel: "All" }, bq: "", saved: false, rr: { topic: "", category: "", geography: "", segment: "", period: "Last 90 days", focus: "Category structure" }, sigView: "overview", oppType: "All", sigKind: "All", metaTab: "overview", metaSim: true, sb: { opp: "", goal: "", channel: "Meta", funnel: "Consideration", market: "", budget: "", timeframe: "", measure: "" }, canvasF: { strength: "Any", urgency: "Any", horizon: "Any", impact: "Any" }, lf: { kind: "All", geo: "All", aud: "All", price: "All" }, wx: "price", wy: "approach", cell: null, globe: { lon: 78, lat: 18, zoom: 1, cat: "All", time: "All", region: "All", iso: null }, needsSignIn: false, bootError: "", loading: true };
 TABLES.forEach(t => { S.db[t] = []; });
 const $ = id => document.getElementById(id);
 const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -442,7 +442,12 @@ const FIELDS = {
 };
 /* Objectives hold several findings under one label, so they are grouped rather than one-per-row. */
 const MULTI_SECTIONS = ["objectives"];
-const WEB_PAGES = [["Homepage", ["/"]], ["About", ["about", "story", "who-we-are"]], ["Products and services", ["product", "shop", "range", "service"]], ["Pricing", ["pricing", "price", "plans"]], ["FAQ", ["faq", "help", "support"]], ["Contact", ["contact", "stockist", "find-us"]]];
+/* The states a research job moves through, in order. The app sets these from what the engine
+   actually reports, never ahead of it. */
+const JOB = [["queued", "Queued"], ["discovering", "Discovering the website"], ["crawling", "Crawling pages"], ["external", "Gathering external research"], ["analysing", "Analysing the brand"], ["synthesising", "Synthesising findings"], ["completed", "Completed"], ["partial", "Partially completed"], ["failed", "Failed"]];
+const jobName = k => (JOB.find(j => j[0] === k) || ["", "Not run"])[1];
+const STAGE_JOB = { 0: "crawling", 1: "crawling", 2: "analysing", 3: "external", 4: "analysing", 5: "external", 6: "analysing", 7: "synthesising" };
+const PAGE_STATUS = { ok: ["Retrieved", "ok"], thin: ["Almost empty", "warn"], failed: ["Could not retrieve", "warn"], skipped: ["Not read", ""] };
 const RESEARCH_FOCUS = ["Category structure", "Consumer behaviour", "Competitor activity", "Pricing and packaging", "Distribution", "Regulation and compliance", "Technology and formats"];
 const CHANNELS = [["Meta", "meta"], ["Google Search", "planned"], ["Reddit", "planned"], ["TikTok", "planned"], ["Email and CRM", "planned"], ["Retail and marketplaces", "planned"]];
 // name, ISO-3, latitude, longitude, region
@@ -468,11 +473,11 @@ function go(route) { S.route = route; S.drawer = null; S.cell = null; if (route 
 
 /* ----- derived state for one brand ----- */
 function facts(id) {
-  const items = of("brand_profile_items", id), products = of("products_services", id), aud = of("audience_profiles", id), comps = of("competitors", id), signals = of("market_signals", id), opps = of("opportunities", id), strategies = of("strategies", id), b = find("brands", id);
+  const pages = of("pages", id), items = of("brand_profile_items", id), products = of("products_services", id), aud = of("audience_profiles", id), comps = of("competitors", id), signals = of("market_signals", id), opps = of("opportunities", id), strategies = of("strategies", id), b = find("brands", id);
   const has = sec => items.some(i => i.section === sec && i.status !== "rejected" && i.text);
   const checks = [["Business model", has("business"), "business"], ["Brand DNA", has("dna"), "dna"], ["Positioning", has("positioning"), "positioning"], ["Products or services", products.length > 0, "products"], ["Intended audience", aud.some(a => a.kind === "intended"), "audience"], ["Observed audience", aud.some(a => a.kind === "observed"), "audience"], ["Audience needs", has("needs"), "audience"], ["Market intelligence", has("category"), "market"], ["Confirmed competitor", comps.some(c => c.status === "confirmed"), "landscape"], ["Goal", !!(b && b.goal), "business"]];
   const all = [...items, ...products, ...aud, ...comps, ...signals, ...opps, ...strategies], fresh = all.map(r => r.updated_at || r.created_at).sort().pop() || (b && b.created_at);
-  return { items, products, aud, comps, signals, opps, strategies, checks, pct: Math.round(checks.filter(c => c[1]).length / checks.length * 100), fresh,
+  return { pages, items, products, aud, comps, signals, opps, strategies, checks, pct: Math.round(checks.filter(c => c[1]).length / checks.length * 100), fresh,
     live: comps.filter(c => c.status !== "excluded"), review: items.filter(i => i.status === "candidate").length, compReview: comps.filter(c => c.status === "candidate").length,
     accepted: opps.filter(o => o.status === "accepted"), proposed: opps.filter(o => o.status === "proposed") };
 }
@@ -494,13 +499,21 @@ function nextMove(b, f) {
 }
 
 /* ----- discovery runner ----- */
+/* The job's state is recorded as it is reached, so leaving the page and coming back shows the
+   truth rather than a spinner. Resuming mid-run needs a queue, which is not built; the app says so. */
+async function setJob(b, state, note) { S.job = state; try { await store.update("brands", b.id, { job_state: state, job_note: note || "", job_at: now() }); } catch (e) {} }
+
 async function startRun(b) {
   const engine = engineFor(b);
   S.run = { brandId: b.id, engine: engine.name, status: "running", log: [], stage: 0, saved: 0, kept: 0 };
   await store.update("brands", b.id, { status: "researching" }); b.status = "researching"; go("run");
   const keys = {};
   try {
+    await setJob(b, "discovering", `${engine.name} engine`);
+    let lastJob = "discovering";
     for await (const ev of engine.run()) {
+      const want = STAGE_JOB[ev.stage];
+      if (want && want !== lastJob) { lastJob = want; setJob(b, want); }
       S.run.stage = ev.stage;
       if (ev.write) {
         const { table, row, links } = ev.write, { key, ...clean } = row;
@@ -516,6 +529,7 @@ async function startRun(b) {
           products_services: x => x.name.toLowerCase() === String(row.name || "").toLowerCase(),
           audience_profiles: x => x.kind === row.kind && (x.name || "") === (row.name || ""),
           competitors: x => x.name.toLowerCase() === String(row.name || "").toLowerCase(),
+          pages: x => x.url === row.url,
           market_signals: x => x.text === row.text || (row.source_url && x.source_url === row.source_url) }[table];
         const prior = same ? have.find(same) : null;
         const mineAlready = !!prior && settled(prior);
@@ -536,6 +550,7 @@ async function startRun(b) {
     }
     S.run.status = S.run.log.some(l => l.kind === "skip") ? "partial" : "done";
   } catch (e) { S.run.status = "failed"; S.run.log.push({ stage: S.run.stage, kind: "warn", msg: "Run failed: " + (e.message || e) }); }
+  await setJob(b, S.run.status === "failed" ? "failed" : S.run.status === "partial" ? "partial" : "completed", `${S.run.saved} records`);
   await mutate(() => store.update("brands", b.id, { status: "ready", last_run_at: now(), last_run_status: S.run.status }),
     `Discovery run ${S.run.status} (${engine.name} engine): ${S.run.saved} records saved`, S.run.status === "failed" ? "The run failed. You can retry." : "Discovery finished.");
   if (S.reviewAfterRun && S.run.status !== "failed" && S.route === "run") go("review");
@@ -691,13 +706,13 @@ const V = {
   },
   run() {
     const r = S.run; if (!r) return emptyState("No discovery run in progress", "Add a brand to start one.", "nav", "quick", "Add a brand");
-    const running = r.status === "running";
+    const running = r.status === "running", jobState = S.job || (b && b.job_state) || "";
     const stages = STAGES.map((label, i) => { const lines = r.log.filter(l => l.stage === i), skipped = lines.length && lines.every(l => l.kind === "skip");
       const state = i > r.stage || (!lines.length && !running) ? "Queued" : i === r.stage && running ? "Working…" : skipped ? "Skipped" : "Done";
       return `<div style="opacity:${state === "Queued" ? .45 : 1}"><div class="row between" style="margin-bottom:8px"><span style="font-weight:600">${i + 1} · ${label}</span><span class="small" style="color:${skipped ? "var(--warn)" : "var(--muted)"}">${state}</span></div><div class="bar"><i style="width:${state === "Queued" ? 0 : state === "Working…" ? 55 : 100}%;background:${skipped ? "var(--warn)" : "var(--ink)"}"></i></div></div>`; }).join("");
     const log = r.log.slice(-11).reverse().map((l, i) => `<div style="color:${i === 0 && running ? "var(--ink)" : l.kind === "ok" ? "var(--muted)" : "var(--warn)"}">${l.kind === "ok" ? "✓" : l.kind === "skip" ? "–" : "!"} ${esc(l.msg)}</div>`).join("");
-    const title = running ? STAGES[r.stage] + "…" : r.status === "failed" ? "The run failed." : r.status === "partial" ? "Finished, with steps skipped." : "All five passes finished.";
-    return `<div class="row" style="gap:24px">${running ? '<div class="pulse" aria-hidden="true"><i></i></div>' : ""}<div style="flex:1 1 400px;min-width:0" role="status"><div class="cap">${running ? `Working · step ${r.stage + 1} of 5` : "Run " + r.status} · ${r.engine} engine</div><h1 style="margin-top:8px">${title}</h1></div></div>
+    const title = running ? STAGES[r.stage] + "…" : r.status === "failed" ? "The run failed." : r.status === "partial" ? "Finished, with steps skipped." : "Research finished.";
+    return `<div class="row" style="gap:24px">${running ? '<div class="pulse" aria-hidden="true"><i></i></div>' : ""}<div style="flex:1 1 400px;min-width:0" role="status"><div class="cap">${jobState ? jobName(jobState).toUpperCase() + " · " : ""}${running ? `step ${r.stage + 1} of 5` : "Run " + r.status} · ${r.engine} engine</div><h1 style="margin-top:8px">${title}</h1></div></div>
       <div class="row" style="gap:32px"><div><span style="font-size:32px;font-weight:600">${r.saved}</span> <span class="muted">records saved</span></div>${r.kept ? `<div><span style="font-size:32px;font-weight:600">${r.kept}</span> <span class="muted">of your confirmed answers left untouched</span></div>` : ""}</div>
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:32px"><div class="col" style="gap:18px">${stages}</div><div class="card mono" style="line-height:1.8;min-height:250px;gap:2px"><div class="cap" style="font-family:Inter,sans-serif;margin-bottom:8px">Live log</div>${log}</div></div>
       <div class="row">${S.reviewAfterRun && r.status !== "failed" ? `<button class="go" data-act="nav" data-to="review" ${running ? "disabled" : ""}>Review what was found →</button>` : `<button class="go" data-act="nav" data-to="brand" ${running ? "disabled" : ""}>Open the workspace →</button>`}${r.status === "failed" ? '<button class="ghost" data-act="rerun">Retry</button>' : ""}<span class="muted small">${running ? "Each record is saved as it arrives. You can leave this page." : ""}</span></div>`;
@@ -1386,15 +1401,31 @@ V.brand = function () {
       <div class="col"><h2>How much of this is confirmed?</h2><div class="seg" style="height:12px">${mix.map(x => `<i style="width:${x[1] / tot * 100}%;background:${x[2]}"></i>`).join("")}</div><div class="row small muted" style="gap:6px 16px">${mix.map(x => `<span><i style="display:inline-block;width:10px;height:10px;background:${x[2]};border-radius:2px;margin-right:6px"></i>${x[0]} · ${x[1]}</span>`).join("")}</div><p class="small muted">Counts claims in the brand profile. Confirming a claim marks it as yours and protects it from being overwritten by a later discovery run.</p></div>
       <div class="col"><h2>What is still missing</h2><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">${Object.entries(FIELDS).map(([sec, labels]) => { const miss = labels.filter(l => !val(sec, l)); const chap = Object.keys(CH_SECTION).find(k => CH_SECTION[k] === sec);
         return `<div class="col" style="gap:4px;border-top:1px solid var(--line2);padding-top:12px"><button class="link" data-act="chapter" data-to="${chap}">${(CHAPTERS.find(c => c[0] === chap) || [])[1]}</button><span class="small ${miss.length ? "" : "muted"}">${miss.length ? miss.length + " of " + labels.length + " fields empty" : "Complete"}</span>${miss.length ? `<span class="small muted">${miss.slice(0, 3).join(", ")}${miss.length > 3 ? "…" : ""}</span>` : ""}</div>`; }).join("")}</div></div>`; },
-    website: () => { const site = (b.website || "").replace(/^https?:\/\//, "").replace(/\/$/, ""), fromSite = r => (r.source_url || "").includes(site.split("/")[0]);
-      const all = [...f.items, ...f.products.map(p => ({ ...p, label: "Product: " + p.name, text: p.description }))].filter(fromSite);
-      const match = (r, keys) => { const u = (r.source_url || ""); if (!u) return false; const path = u.split(site)[1] || "/"; return keys.some(k => k === "/" ? path === "/" || path === "" : path.toLowerCase().includes(k)); };
-      const rows = WEB_PAGES.map(([name, keys]) => { const got = all.filter(r => match(r, keys)); return `<div class="item"><div style="flex:1 1 150px;max-width:210px"><div style="font-weight:600">${name}</div><div class="small muted mono">${esc(site)}${keys[0] === "/" ? "/" : "/" + keys[0]}</div></div>
-        <div class="col" style="flex:999 1 300px;min-width:0;gap:6px">${got.length ? got.map(r => `<div class="small"><strong style="font-weight:600">${esc(r.label)}:</strong> ${esc(r.text)}</div>`).join("") : `<span class="muted small">${b.is_demo ? "Nothing extracted from this page." : "Not attempted. No discovery engine is connected, so no page has been read."}</span>`}</div>
-        <div class="row" style="gap:6px"><span class="tag ${got.length ? "ok" : "warn"}">${got.length ? got.length + " extracted" : "Nothing on file"}</span><button class="pill" data-act="addField" data-section="business" data-url="${esc(site + (keys[0] === "/" ? "/" : "/" + keys[0]))}">Add by hand</button></div></div>`; }).join("");
-      return `<p class="muted" style="max-width:760px">What the brand's own public pages say, page by page, and what was taken from each. ${CONFIG.RESEARCH_ENDPOINT ? "" : "<strong>No discovery engine is connected</strong>, so nothing has been crawled. " + (b.is_demo ? "The demo brand's claims are fictional and carry made-up source paths." : "Add what each page says by hand, and it is filed as user-confirmed with that page as its source.")}</p>
-        <div>${rows}</div>
-        <div class="sunk col" style="gap:6px"><div class="cap">What a connected engine would do</div><p class="small">Fetch each page above within the site's robots rules, extract the brand description, products, value proposition, positioning, messaging, audience signals, pricing, language, differentiation claims and calls to action, and file each with its page as the source. Pages it cannot reach are listed as failed rather than guessed at.</p><div><button class="ghost" data-act="rerun">Run discovery</button></div></div>`; },
+    website: () => { const pages = f.pages.slice().sort((x, y) => (x.kind === "Homepage" ? -1 : y.kind === "Homepage" ? 1 : 0) || String(x.kind).localeCompare(String(y.kind)));
+      const fromPage = url => [...f.items.filter(r => r.source_url === url), ...f.products.filter(p => p.source_url === url).map(p => ({ label: "Product: " + p.name, text: p.description || "" }))];
+      const row = p => { const got = fromPage(p.url), [label, tone] = PAGE_STATUS[p.status] || PAGE_STATUS.skipped;
+        return `<div class="item"><div style="flex:1 1 180px;max-width:260px"><div style="font-weight:600">${esc(p.title) || esc(p.kind)}</div>
+            <div class="small muted mono" style="word-break:break-all">${esc(p.url.replace(/^https?:\/\//, ""))}</div>
+            <div class="small muted">${esc(p.kind)}${p.via ? " · found via " + esc(p.via) : ""}${p.rendered ? " · rendered" : ""}</div></div>
+          <div class="col" style="flex:999 1 300px;min-width:0;gap:6px">
+            ${got.length ? got.map(r => `<div class="small"><strong style="font-weight:600">${esc(r.label)}:</strong> ${esc(r.text)}</div>`).join("")
+              : `<span class="muted small">${p.status === "ok" ? "Read, but nothing in the profile cites this page." : esc(p.reason) || "Nothing was taken from this page."}</span>`}
+            <div class="small muted">${p.chars ? p.chars.toLocaleString() + " characters read · " : ""}retrieved ${when(p.fetched_at || p.created_at)}${p.http_status ? " · HTTP " + p.http_status : ""}</div></div>
+          <div class="row" style="gap:6px;align-items:flex-start"><span class="tag ${tone}">${label}</span>
+            <a class="pill" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">View source</a>
+            ${p.status === "ok" ? "" : `<button class="pill" data-act="refetch" data-id="${p.id}">Retry</button>`}
+            <button class="pill" data-act="addField" data-section="business" data-url="${esc(p.url)}">Add by hand</button></div></div>`; };
+      const okN = pages.filter(p => p.status === "ok").length, bad = pages.filter(p => p.status === "failed"), thin = pages.filter(p => p.status === "thin");
+      if (!pages.length) return `<p class="muted" style="max-width:760px">No page has been crawled for this brand yet.</p>
+        ${CONFIG.RESEARCH_ENDPOINT ? `<div class="sunk col" style="align-items:flex-start"><h3>Nothing crawled yet</h3><p class="muted">The research engine is connected. Run it and this fills with the pages it actually found and read.</p><button class="go" data-act="rerun">Run the research</button></div>`
+          : `<div class="sunk col" style="align-items:flex-start"><h3>No research engine is connected</h3><p class="muted">A browser cannot read another company's site, so crawling happens in <span class="mono">api/research.js</span>. Deploy it and set <span class="mono">ANTHROPIC_API_KEY</span>.</p><button class="ghost" data-act="nav" data-to="data">Setup steps</button></div>`}`;
+      return `<p class="muted" style="max-width:800px">Every page the engine discovered and tried to read, with what came off it. Pages are found from the site's own sitemap and links — no path is assumed to exist.</p>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          <span class="tag ok">${okN} retrieved</span>${thin.length ? `<span class="tag warn">${thin.length} almost empty</span>` : ""}${bad.length ? `<span class="tag warn">${bad.length} could not be retrieved</span>` : ""}
+          <span class="small muted">${f.items.filter(i => i.source_url).length} claims cite one of these pages</span></div>
+        <div>${pages.map(row).join("")}</div>
+        ${thin.length ? `<div class="sunk col" style="gap:6px;align-items:flex-start"><div class="cap">Why some pages came back almost empty</div><p class="small">Those pages build themselves in the browser, so a plain fetch sees the shell and no words. ${ENGINE.renderer ? "A rendering crawler is configured and was tried on them." : "Set <span class=\"mono\">FIRECRAWL_API_KEY</span> on the deployment and they are retried through a renderer instead of being written off."}</p></div>` : ""}
+        ${bad.length ? `<div class="sunk col" style="gap:6px;align-items:flex-start"><div class="cap">Pages that could not be read</div>${bad.map(p => `<div class="small">${esc(p.url)} — ${esc(p.reason) || "no reason recorded"}</div>`).join("")}<p class="small muted">Retry one above, or add what it says by hand and it is filed against that page as yours.</p></div>` : ""}`; },
     dna: () => `<p class="muted small">What the brand stands for and how it behaves. Your words here are filed as user-confirmed and are never overwritten by a discovery run.</p>${fieldBlock(f, "dna", FIELDS.dna)}${other(f, "identity", []).length ? `<h3 style="margin-top:14px">Also recorded under identity</h3><div>${other(f, "identity", []).map(r => itemRow(r)).join("")}</div>` : ""}`,
     business: () => `<div class="sunk col" style="gap:6px"><div class="row between"><span class="cap">Commercial objective</span><button class="link small" data-act="editGoal">Edit</button></div><p style="font-size:16px;${b.goal ? "" : "color:var(--muted)"}">${esc(b.goal) || "No goal set. Opportunities cannot be weighed against one."}</p>${b.success ? `<p class="small muted">A win in 90 days: ${esc(b.success)}</p>` : ""}</div>${fieldBlock(f, "business", FIELDS.business)}`,
     products: () => `<p class="muted small">The portfolio, with what each product is for and what it costs. ${f.products.length} on file.</p>
@@ -1891,6 +1922,15 @@ const A = {
   connectOpp: d => { const opps = of("opportunities"); if (!opps.length) return A.oppFromSignal(d); form("Connect to an opportunity", [F("opp", "Opportunity", opps[0].name, { type: "select", options: opps.map(o => o.name) })], async v => { const o = opps.find(x => x.name === v.opp); if (!S.db.opportunity_evidence.some(l => l.opportunity_id === o.id && l.signal_id === d.id)) await store.insert("opportunity_evidence", { brand_id: S.brandId, opportunity_id: o.id, signal_id: d.id }); }, v => `Linked a signal to: ${v.opp}`, "The signal becomes evidence for that opportunity."); },
   assign: d => { const o = find("opportunities", d.id); form("Assign", [F("owner", "Who owns this opportunity", o.owner)], v => store.update("opportunities", d.id, v), v => `Assigned “${o.name}” to ${v.owner || "nobody"}`); },
   rank: d => { const all = orderOpps(of("opportunities")), shown = all.filter(FILT[S.oppFilter]), i = shown.findIndex(o => o.id === d.id), other = shown[i + (+d.v)]; if (!other) return; const x = all.indexOf(shown[i]), y = all.indexOf(other); [all[x], all[y]] = [all[y], all[x]]; mutate(async () => { for (let k = 0; k < all.length; k++) if (all[k].rank !== k) await store.update("opportunities", all[k].id, { rank: k }); }, `Changed team priority of: ${shown[i].name}`); },
+  refetch: async d => { const p = find("pages", d.id);
+    if (!CONFIG.RESEARCH_ENDPOINT) return toast("No research engine is connected, so the page cannot be fetched.");
+    toast("Retrying " + p.url);
+    try {
+      const res = await fetch(CONFIG.RESEARCH_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brand: brand(), refetch: { url: p.url, kind: p.kind } }) });
+      const text = await res.text(), ev = text.trim().split("\n").filter(Boolean).map(JSON.parse).pop();
+      if (!ev || !ev.write) return toast("The engine returned nothing for that page.");
+      await mutate(() => store.update("pages", p.id, ev.write.row), `Retried ${p.url}`, ev.msg);
+    } catch (e) { toast("The retry failed: " + (e.message || e)); } },
   rerun: () => { const b = brand(); if (!b) return; if (S.run && S.run.status === "running") return toast("A run is already going."); if (!CONFIG.RESEARCH_ENDPOINT && !(S.run && S.run.status === "failed")) return toast("The discovery engine isn't connected, so there is nothing new to fetch."); startRun(b); },
   add: d => { const t = T[d.table], preset = { ...(t.defaults || {}), ...(d.kind ? { kind: d.kind } : {}), ...(d.section ? { section: d.section } : {}), ...(d.preset || {}) };
     const title = d.table === "brand_profile_items" ? "Add to " + SECTION_NAME[d.section] : d.table === "market_signals" ? "Add: " + (KINDS[d.kind] || "signal").toLowerCase() : "Add " + (/^[aeiou]/.test(t.label) ? "an " : "a ") + t.label;

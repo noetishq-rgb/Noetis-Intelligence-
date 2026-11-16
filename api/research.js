@@ -31,6 +31,10 @@
      RESEARCH_MODEL           optional, legacy: overrides both if set.
      RESEARCH_WEB_SEARCH      optional, "0" turns off external research and reads only the site
      RESEARCH_SEARCH_USES     optional, cap on web searches per run. Default 6.
+     RESEARCH_MAX_PAGES       optional, how many of the brand's pages to read. Default 8.
+     FIRECRAWL_API_KEY        optional. A plain fetch cannot read a page that builds itself in the
+                              browser; with this set, such a page is retried through Firecrawl's
+                              renderer instead of being written off as unreadable.
 
    What it will not do: invent a fact to fill a gap, state a market size or share, or return a
    source URL it did not actually retrieve. Empty is a valid answer and is filed as a gap.
@@ -43,17 +47,25 @@ const MODELS = {
 const SEARCH_USES = Math.max(0, Math.min(12, Number(process.env.RESEARCH_SEARCH_USES || 6)));
 const WEB_SEARCH_TOOL = "web_search_20250305"; // change if Anthropic ships a newer server tool
 const UA = "NoetisIntelligenceBot/1.0 (brand research; contact the site owner's analytics team)";
-const MAX_PAGES = 6, PAGE_BYTES = 900_000, PAGE_CHARS = 9000, FETCH_MS = 15_000;
+const MAX_PAGES = Math.max(1, Math.min(14, Number(process.env.RESEARCH_MAX_PAGES || 8)));
+const PAGE_BYTES = 900_000, PAGE_CHARS = 9000, FETCH_MS = 15_000, SITEMAP_CAP = 400;
 
-/* The pages worth reading, and the words that identify each one. */
-const WANTED = [
-  ["Homepage", []],
-  ["About", ["about", "story", "who-we-are", "our-story", "mission"]],
-  ["Products and services", ["product", "shop", "range", "collection", "service", "catalog", "catalogue"]],
-  ["Pricing", ["pricing", "price", "plans", "subscribe"]],
-  ["FAQ", ["faq", "help", "support", "questions"]],
-  ["Contact", ["contact", "stockist", "store-locator", "find-us"]]
+/* What a page looks like it is, judged from its real URL and link text. Nothing is assumed to
+   exist: these only classify URLs the site actually publishes. */
+const KINDS = [
+  ["About", ["about", "story", "who-we-are", "our-story", "mission", "team", "founders"], 2],
+  ["Products and services", ["product", "shop", "store", "range", "collection", "service", "catalog", "catalogue", "menu", "buy"], 3],
+  ["Pricing", ["pricing", "price", "plans", "subscribe", "membership"], 1],
+  ["FAQ", ["faq", "help", "support", "questions", "how-it-works"], 1],
+  ["Contact", ["contact", "stockist", "store-locator", "find-us", "locations"], 1],
+  ["Case study", ["case-stud", "customer-stor", "success-stor", "testimonial", "results"], 1],
+  ["Blog or resources", ["blog", "journal", "resources", "guides", "learn", "news", "articles"], 1]
 ];
+/* Never worth a crawl: private flows, machine files, and the endless tails of a site. */
+const SKIP_RE = /(\/(login|signin|sign-in|register|signup|account|cart|checkout|basket|order|wishlist|search|wp-admin|wp-login|admin|privacy|terms|cookie|returns|shipping-policy|refund)(\/|$|\?))|(\.(xml|json|pdf|zip|jpe?g|png|gif|webp|svg|mp4|mp3|css|js|ico|woff2?)($|\?))|([?&](page|p|start|offset)=\d{2,})|(\/page\/\d+)|(\/(tag|tags|author)\/)/i;
+const kindOf = url => { const p = (url.pathname + url.search).toLowerCase();
+  for (const [name, keys] of KINDS) if (keys.some(k => p.includes(k))) return name;
+  return "Other page"; };
 
 /* The labels the app expects, per section. A label outside this list still files, but one of
    these lands in the right row of the brand canvas instead of under "also recorded". */
@@ -102,16 +114,71 @@ async function get(url, { timeout = FETCH_MS } = {}) {
 /* robots.txt, read for the * group only. A Disallow we match means we do not fetch the page. */
 async function robots(origin) {
   const r = await get(origin + "/robots.txt", { timeout: 6000 });
-  if (!r.ok) return { rules: [], fetched: false };
-  const rules = []; let inStar = false;
+  if (!r.ok) return { rules: [], sitemaps: [], fetched: false };
+  const rules = [], sitemaps = []; let inStar = false;
   for (const raw of r.html.split("\n")) {
     const line = raw.split("#")[0].trim(); if (!line) continue;
     const [kRaw, ...rest] = line.split(":"); const k = kRaw.trim().toLowerCase(), v = rest.join(":").trim();
     if (k === "user-agent") inStar = v === "*";
+    else if (k === "sitemap" && v) sitemaps.push(v);
     else if (inStar && (k === "allow" || k === "disallow") && v) rules.push({ allow: k === "allow", path: v });
   }
-  return { rules, fetched: true };
-};
+  return { rules, sitemaps, fetched: true };
+}
+
+/* Read the sitemaps the site declares, then the usual location, following one level of index. */
+async function sitemapUrls(base, declared) {
+  const tried = new Set(), urls = [], notes = [];
+  const read = async (u, depth) => {
+    if (tried.has(u) || tried.size > 6 || urls.length > SITEMAP_CAP) return;
+    tried.add(u);
+    const r = await get(u, { timeout: 8000 });
+    if (!r.ok) { notes.push(`${u.split("/").pop()} ${r.reason}`); return; }
+    const locs = [...r.html.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map(m => m[1]);
+    const isIndex = /<sitemapindex/i.test(r.html);
+    if (isIndex && depth < 1) { for (const l of locs.slice(0, 5)) await read(l, depth + 1); return; }
+    for (const l of locs) { if (urls.length > SITEMAP_CAP) break; urls.push(l); }
+  };
+  for (const u of declared) await read(u, 0);
+  if (!urls.length) for (const u of [base.origin + "/sitemap.xml", base.origin + "/sitemap_index.xml"]) await read(u, 0);
+  return { urls, note: urls.length ? "" : notes.slice(0, 1).join("") };
+}
+
+/* A plain fetch cannot see a page that builds itself in the browser. When one comes back empty
+   and a rendering crawler is configured, try that before calling the page unreadable. */
+async function firecrawl(url) {
+  const key = process.env.FIRECRAWL_API_KEY; if (!key) return null;
+  try {
+    const ac = new AbortController(), t = setTimeout(() => ac.abort(), 25_000);
+    const res = await fetch("https://api.firecrawl.dev/v1/scrape", { method: "POST", signal: ac.signal,
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      body: JSON.stringify({ url, formats: ["markdown"], onlyMainContent: true, timeout: 20_000 }) });
+    clearTimeout(t);
+    if (!res.ok) return { ok: false, reason: `the rendering crawler answered ${res.status}` };
+    const j = await res.json();
+    const md = j && j.data && j.data.markdown;
+    if (!md) return { ok: false, reason: "the rendering crawler returned no content" };
+    return { ok: true, url: (j.data.metadata && j.data.metadata.sourceURL) || url, text: String(md).slice(0, PAGE_CHARS),
+      title: (j.data.metadata && (j.data.metadata.title || j.data.metadata.ogTitle)) || "", via: "rendered" };
+  } catch (e) { return { ok: false, reason: e.name === "AbortError" ? "the rendering crawler timed out" : String(e.message || e) }; }
+}
+
+/* One page, by whatever means works: plain fetch first because it is free and fast. */
+async function readPage(url) {
+  const p = await get(url);
+  if (p.ok) { const text = textOf(p.html); if (text.length >= 400) return { ok: true, url: p.url || url, text, title: titleOf(p.html), via: "fetched" };
+    const fc = await firecrawl(url);
+    if (fc && fc.ok) return fc;
+    return { ok: true, url: p.url || url, text, title: titleOf(p.html), via: "fetched", thin: true }; }
+  const fc = await firecrawl(url);
+  if (fc && fc.ok) return fc;
+  return { ok: false, reason: p.reason + (fc ? ` · ${fc.reason}` : ""), status: p.status };
+}
+
+const titleOf = html => {
+  const t = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || [])[1] || "";
+  return t.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+};;
 const robotsAllows = (rules, path) => {
   let best = null;
   for (const r of rules) if (path.startsWith(r.path) && (!best || r.path.length > best.path.length)) best = r;
@@ -129,20 +196,11 @@ function textOf(html) {
   return txt.slice(0, PAGE_CHARS);
 };
 
-/* Same-site links only, one best candidate per wanted page type. */
-function pickLinks(html, base) {
-  const found = new Map();
-  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"'#]+)["'][^>]*>/gi)) {
-    let u; try { u = new URL(m[1], base); } catch { continue; }
-    if (u.host !== base.host || !/^https?:$/.test(u.protocol)) continue;
-    u.hash = ""; const path = (u.pathname + u.search).toLowerCase();
-    if (path.length > 120) continue;
-    for (const [name, keys] of WANTED) {
-      if (!keys.length || found.has(name)) continue;
-      if (keys.some(k => path.includes(k))) found.set(name, u.toString());
-    }
-  }
-  return found;
+/* Every internal link the page offers. Filtering and ranking happen on the real URLs. */
+function links(html, baseUrl) {
+  const out = [];
+  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"'#\s]+)["']/gi)) out.push(m[1]);
+  return [...new Set(out)];
 };
 
 /* ---------- the two passes ---------- */
@@ -265,6 +323,32 @@ function cleanItem(r, pageUrls) {
 module.exports = async function handler(req, res) {
   if (req.method === "GET" || req.method === "HEAD") {
     const ready = !!process.env.ANTHROPIC_API_KEY;
+    /* ?probe=<url> — discovery only: robots, sitemap, links, classification and one page read.
+       No model call, so it costs nothing and shows exactly what the crawler can see. */
+    if (req.query && req.query.probe) {
+      const base = siteUrl(req.query.probe);
+      if (!base) return res.status(400).json({ error: "that is not a web address" });
+      const rb = await robots(base.origin);
+      const home = await readPage(base.toString());
+      const maps = await sitemapUrls(base, rb.sitemaps);
+      const cand = new Map();
+      const offer = u => { let x; try { x = new URL(u, base); } catch { return; }
+        if (x.host !== base.host) return; x.hash = "";
+        const key = x.toString().replace(/\/$/, "");
+        if (SKIP_RE.test(x.pathname + x.search) || (x.pathname + x.search).length > 140) return;
+        if (!cand.has(key)) cand.set(key, { url: x.toString(), kind: kindOf(x) }); };
+      maps.urls.forEach(offer);
+      if (home.ok) { const raw = await get(base.toString()); if (raw.ok) links(raw.html, home.url).forEach(offer); }
+      const byKind = {}; [...cand.values()].forEach(c => { (byKind[c.kind] = byKind[c.kind] || []).push(c.url); });
+      return res.status(200).json({ engine: "noetis-research", probe: base.toString(),
+        robots: { found: rb.fetched, rules: rb.rules.length, sitemaps: rb.sitemaps },
+        sitemap: { urls: maps.urls.length, note: maps.note },
+        homepage: home.ok ? { ok: true, url: home.url, title: home.title, chars: home.text.length, via: home.via, thin: !!home.thin, sample: home.text.slice(0, 400) } : { ok: false, reason: home.reason },
+        candidates: cand.size,
+        byKind: Object.fromEntries(Object.entries(byKind).map(([k, v]) => [k, { count: v.length, examples: v.slice(0, 3) }])),
+        renderer: process.env.FIRECRAWL_API_KEY ? "firecrawl" : "none" });
+    }
+
     /* ?check=models — one token to each routed model, to confirm this account can call them.
        Costs next to nothing and is the honest way to find out before a real run. */
     if (ready && req.query && req.query.check === "models") {
@@ -276,6 +360,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ engine: "noetis-research", check: "models", routing: out });
     }
     return res.status(200).json({ engine: "noetis-research", ready, model: MODELS.analyse, models: MODELS, searchUses: SEARCH_USES,
+      maxPages: MAX_PAGES, renderer: process.env.FIRECRAWL_API_KEY ? "firecrawl" : "",
       webSearch: process.env.RESEARCH_WEB_SEARCH !== "0" && SEARCH_USES > 0,
       reason: ready ? "" : "ANTHROPIC_API_KEY is not set on this deployment, so the engine cannot run." });
   }
@@ -286,35 +371,82 @@ module.exports = async function handler(req, res) {
   const say = (stage, kind, msg, write) => { res.write(JSON.stringify(write ? { stage, kind, msg, write } : { stage, kind, msg }) + "\n"); res.flush && res.flush(); };
 
   const brand = (req.body && req.body.brand) || {};
+
+  /* Retry one page, for the retry action beside a failed page in the UI. */
+  if (req.body && req.body.refetch && req.body.refetch.url) {
+    const { url, kind } = req.body.refetch;
+    const p = await readPage(url);
+    say(0, p.ok ? "ok" : "warn", p.ok ? `${url} · ${p.text.length} characters` : `${url} ${p.reason}`,
+      { table: "pages", row: { url: p.ok ? p.url : url, kind: kind || "Other page", status: p.ok ? (p.text.length < 400 ? "thin" : "ok") : "failed",
+        title: p.title || "", chars: p.ok ? p.text.length : 0, reason: p.ok ? "" : p.reason, fetched_at: new Date().toISOString(), rendered: p.via === "rendered" } });
+    return res.end();
+  }
+
   try {
     if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set on this deployment");
     const base = siteUrl(brand.website);
     if (!base) throw new Error(`"${brand.website || ""}" is not a web address the engine can open`);
 
-    /* ---- stage 0: the brand's own site ---- */
+    /* ---- stage 0: discover and crawl the brand's own site ---- */
     say(STAGE.SITE, "ok", `reading ${base.host}`);
     const rb = await robots(base.origin);
-    say(STAGE.SITE, rb.fetched ? "ok" : "warn", rb.fetched ? `robots.txt read · ${rb.rules.length} rule${rb.rules.length === 1 ? "" : "s"} for crawlers` : "no robots.txt found; reading only the pages linked from the homepage");
+    say(STAGE.SITE, rb.fetched ? "ok" : "warn", rb.fetched
+      ? `robots.txt read · ${rb.rules.length} rule${rb.rules.length === 1 ? "" : "s"} for crawlers${rb.sitemaps.length ? ` · ${rb.sitemaps.length} sitemap${rb.sitemaps.length === 1 ? "" : "s"} declared` : ""}`
+      : "no robots.txt found; discovering pages from the sitemap and the homepage's own links");
 
-    const home = await get(base.toString());
-    if (!home.ok) throw new Error(`${base.host} ${home.reason}`);
-    const pages = [{ name: "Homepage", url: home.url || base.toString(), text: textOf(home.html) }];
-    say(STAGE.SITE, "ok", `homepage read · ${pages[0].text.length} characters of text`);
+    const homeRaw = await get(base.toString());
+    if (!homeRaw.ok) throw new Error(`${base.host} ${homeRaw.reason}`);
+    const home = homeRaw, homeRead = await readPage(base.toString());
+    const homeUrl = homeRead.ok ? homeRead.url : (home.url || base.toString());
 
-    const links = pickLinks(home.html, base);
-    for (const [name] of WANTED.slice(1)) {
-      if (pages.length >= MAX_PAGES) break;
-      const url = links.get(name);
-      if (!url) { say(STAGE.SITE, "skip", `${name.toLowerCase()} page: no link found on the homepage`); continue; }
-      const path = new URL(url).pathname;
-      if (!robotsAllows(rb.rules, path)) { say(STAGE.SITE, "skip", `${name.toLowerCase()} page: robots.txt asks crawlers not to read ${path}`); continue; }
-      const p = await get(url);
-      if (!p.ok) { say(STAGE.SITE, "warn", `${name.toLowerCase()} page ${p.reason} — nothing taken from it`); continue; }
-      const text = textOf(p.html);
-      pages.push({ name, url: p.url || url, text });
-      say(STAGE.SITE, "ok", `${name.toLowerCase()} page read · ${text.length} characters`);
+    /* Candidates come from what the site publishes, never from guessed paths. */
+    const cand = new Map();
+    const offer = (u, via) => { let x; try { x = new URL(u, homeUrl); } catch { return; }
+      if (x.host !== base.host || !/^https?:$/.test(x.protocol)) return;
+      x.hash = ""; const key = x.toString().replace(/\/$/, "");
+      if (key === homeUrl.replace(/\/$/, "")) return;
+      if (SKIP_RE.test(x.pathname + x.search)) return;
+      if ((x.pathname + x.search).length > 140) return;
+      if (!cand.has(key)) cand.set(key, { url: x.toString(), kind: kindOf(x), via });
+    };
+
+    const maps = await sitemapUrls(base, rb.sitemaps);
+    maps.urls.forEach(u => offer(u, "sitemap"));
+    say(STAGE.SITE, maps.urls.length ? "ok" : "skip", maps.urls.length
+      ? `sitemap read · ${maps.urls.length} page${maps.urls.length === 1 ? "" : "s"} published${maps.note ? " · " + maps.note : ""}`
+      : `no sitemap found${maps.note ? " · " + maps.note : ""}; using the homepage's links instead`);
+
+    const fromHome = links(home.html, homeUrl);
+    fromHome.forEach(u => offer(u, "homepage link"));
+    say(STAGE.SITE, "ok", `homepage read · ${fromHome.length} internal links · ${cand.size} candidate page${cand.size === 1 ? "" : "s"} after filtering`);
+
+    /* Pick a spread: the best few of each kind the site actually has. */
+    const picked = [], quota = Object.fromEntries(KINDS.map(([n, , q]) => [n, q]));
+    const score = c => (c.via === "sitemap" ? 0 : 1) + c.url.split("/").length * 0.1;
+    for (const [name] of KINDS) {
+      const l = [...cand.values()].filter(c => c.kind === name).sort((a, c) => score(a) - score(c));
+      for (const c of l.slice(0, quota[name])) if (picked.length < MAX_PAGES - 1) picked.push(c);
     }
+    if (picked.length < MAX_PAGES - 1)
+      for (const c of [...cand.values()].filter(c => c.kind === "Other page").sort((a, c2) => score(a) - score(c2)))
+        if (picked.length < MAX_PAGES - 1) picked.push(c);
+
+    const pageRow = (url, kind, st, extra) => ({ table: "pages", row: { url, kind, status: st, fetched_at: new Date().toISOString(), ...extra } });
+    const pages = [{ name: "Homepage", url: homeUrl, text: homeRead.ok ? homeRead.text : textOf(home.html), title: homeRead.ok ? homeRead.title : titleOf(home.html) }];
+    say(STAGE.SITE, "ok", `homepage · ${pages[0].title || "no title"} · ${pages[0].text.length} characters`, pageRow(homeUrl, "Homepage", pages[0].text.length < 400 ? "thin" : "ok", { title: pages[0].title, chars: pages[0].text.length, via: "the address you gave", rendered: homeRead.via === "rendered" }));
+
+    for (const c of picked) {
+      const path = new URL(c.url).pathname;
+      if (!robotsAllows(rb.rules, path)) { say(STAGE.SITE, "skip", `${path} · robots.txt asks crawlers not to read it`, pageRow(c.url, c.kind, "skipped", { reason: "robots.txt disallows it", via: c.via })); continue; }
+      const p = await readPage(c.url);
+      if (!p.ok) { say(STAGE.SITE, "warn", `${path} ${p.reason}`, pageRow(c.url, c.kind, "failed", { reason: p.reason, http_status: p.status || null, via: c.via })); continue; }
+      pages.push({ name: c.kind, url: p.url, text: p.text, title: p.title });
+      say(STAGE.SITE, p.thin ? "warn" : "ok", `${c.kind.toLowerCase()} · ${p.title || path} · ${p.text.length} characters${p.via === "rendered" ? " (rendered)" : ""}${p.thin ? " — almost empty" : ""}`,
+        pageRow(p.url, c.kind, p.thin ? "thin" : "ok", { title: p.title, chars: p.text.length, via: c.via, reason: p.thin ? "Returned almost no text; the page is probably built in the browser" : "", rendered: p.via === "rendered" }));
+    }
+    const thin = pages.filter(p => p.text.length < 400);
     if (pages.length === 1) say(STAGE.SITE, "warn", "only the homepage could be read, so the profile will be thin");
+    if (thin.length) say(STAGE.SITE, "warn", `${thin.length} page${thin.length === 1 ? "" : "s"} returned almost no text — likely rendered by JavaScript. ${process.env.FIRECRAWL_API_KEY ? "" : "A rendering crawler (set FIRECRAWL_API_KEY) would read these."}`);
 
     /* ---- stage 1: read the pages (cheap model), then think about them (better model) ---- */
     const chars = pages.reduce((t, p) => t + p.text.length, 0);

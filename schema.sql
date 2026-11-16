@@ -54,6 +54,10 @@ create table brands (
   goal text not null default '',
   success text not null default '',
   status text not null default 'new' check (status in ('new','researching','ready')),
+  -- The research job, recorded as it progresses so leaving the page does not lose where it got to.
+  job_state text not null default '' check (job_state in ('','queued','discovering','crawling','external','analysing','synthesising','completed','partial','failed')),
+  job_note text not null default '',
+  job_at timestamptz,
   reviewed_at timestamptz,                         -- the founder worked through the report
   confirmed_at timestamptz,                        -- the founder confirmed it as the brand context
   confirmed_by text not null default '',
@@ -71,6 +75,27 @@ create table brands (
 );
 
 -- One row per claim about the brand. Never one blob per profile.
+-- Every page the engine discovered and tried to read, including the ones it could not.
+-- URLs come from the site's own sitemap and links; no path is ever assumed to exist.
+create table pages (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  brand_id uuid not null references brands(id) on delete cascade,
+  url text not null,
+  title text not null default '',
+  kind text not null default 'Other page',         -- Homepage | About | Pricing | ... as classified
+  status text not null default 'ok' check (status in ('ok','thin','failed','skipped')),
+  reason text not null default '',                 -- why it failed, was thin, or was skipped
+  http_status int,
+  chars int not null default 0,
+  via text not null default '',                    -- sitemap | homepage link | the address you gave
+  rendered boolean not null default false,         -- needed a rendering crawler to read
+  fetched_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz,
+  unique (brand_id, url)
+);
+
 create table brand_profile_items (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
@@ -392,6 +417,7 @@ create index on brand_profile_items (brand_id);
 create index on products_services (brand_id);
 create index on audience_profiles (brand_id);
 create index on competitors (brand_id);
+create index on pages (brand_id);
 create index on market_signals (brand_id);
 create index on market_signals (competitor_id);
 create index on experiments (opportunity_id);
@@ -413,7 +439,7 @@ create policy "members read memberships" on workspace_members for select using (
 do $$
 declare t text;
 begin
-  foreach t in array array['brands','brand_profile_items','products_services','audience_profiles','competitors','market_signals','opportunities','opportunity_evidence','experiments','opportunity_notes','strategies','research_requests'] loop
+  foreach t in array array['brands','pages','brand_profile_items','products_services','audience_profiles','competitors','market_signals','opportunities','opportunity_evidence','experiments','opportunity_notes','strategies','research_requests'] loop
     execute format('alter table %I enable row level security', t);
     execute format('create policy "members read" on %I for select using (is_member(workspace_id))', t);
     execute format('create policy "editors insert" on %I for insert with check (can_edit(workspace_id))', t);
