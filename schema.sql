@@ -49,9 +49,15 @@ create table brands (
   category text not null,
   geography text not null,                         -- primary market
   markets text not null default '',                -- other markets it sells into
+  summary text not null default '',                -- the research run's read of the business
+  summary_edited boolean not null default false,
   goal text not null default '',
   success text not null default '',
   status text not null default 'new' check (status in ('new','researching','ready')),
+  reviewed_at timestamptz,                         -- the founder worked through the report
+  confirmed_at timestamptz,                        -- the founder confirmed it as the brand context
+  confirmed_by text not null default '',
+  confirm_note text not null default '',
   is_demo boolean not null default false,
   demo_version int,
   dim_labels jsonb not null default '{}',          -- per-brand names for the positioning dimensions
@@ -69,10 +75,19 @@ create table brand_profile_items (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
   brand_id uuid not null references brands(id) on delete cascade,
-  section text not null check (section in ('dna','business','positioning','needs','category','identity')),
+  section text not null check (section in ('dna','business','positioning','needs','category','marketing','objectives','assessment','identity')),
   label text not null,
   text text not null,
   excerpt text not null default '',                -- the words the claim came from, verbatim
+  -- A founder correction keeps what the research found, so an edit is never a silent erasure.
+  original_text text not null default '',
+  original_provenance text not null default '',
+  edited_at timestamptz,
+  edited_by text not null default '',
+  -- A later run that contradicts a confirmed finding proposes; it never overwrites.
+  proposed_text text not null default '',
+  proposed_at timestamptz,
+  proposed_source text not null default '',
   provenance text not null default 'unverified' check (provenance in ('brand_stated','observed','user_confirmed','ai_inferred','unverified')),
   confidence text not null default 'Medium' check (confidence in ('Low','Medium','High')),
   status text not null default 'candidate' check (status in ('candidate','confirmed','rejected')),

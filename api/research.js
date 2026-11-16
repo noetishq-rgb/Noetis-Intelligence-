@@ -57,13 +57,19 @@ const WANTED = [
 
 /* The labels the app expects, per section. A label outside this list still files, but one of
    these lands in the right row of the brand canvas instead of under "also recorded". */
+const STAGE = { SITE: 0, PRODUCTS: 1, BUSINESS: 2, AUDIENCE: 3, POSITIONING: 4, MARKET: 5, MARKETING: 6, SYNTHESIS: 7 };
 const FIELDS = {
   dna: ["Purpose", "Mission", "Vision", "Brand promise", "Values", "Personality", "Tone of voice", "Messaging pillars", "Visual identity"],
   business: ["What the business is", "Business model", "Revenue model", "Problem it solves", "Business objectives", "Growth priority", "Business stage", "Distribution", "Channels in use", "Social presence"],
   positioning: ["Positioning statement", "Value proposition", "Differentiators", "Price position", "Perceived strengths", "Perceived weaknesses", "Messaging consistency", "Positioning gaps", "Repositioning to consider"],
   needs: ["Customer needs", "Motivations", "Pain points", "Purchase triggers", "Objections", "Buying behaviour"],
-  category: ["Market overview", "Category developments", "Consumer behaviour shifts", "Industry trends", "Demand patterns", "Pricing movements", "Regulatory or technology change", "Geographic differences"]
+  category: ["Market overview", "Category developments", "Consumer behaviour shifts", "Industry trends", "Demand patterns", "Pricing movements", "Regulatory or technology change", "Geographic differences"],
+  marketing: ["Website assessment", "Public social presence", "Visible marketing channels", "Content themes", "Public campaigns", "Distribution and acquisition signals", "Partnerships", "Marketing gaps"],
+  objectives: ["Observed priority", "Inferred priority", "To validate with the founder"],
+  assessment: ["Where the brand stands today", "Strongest visible advantages", "Potential challenges", "Where positioning could improve", "What deserves further investigation"]
 };
+/* Which stage each section's findings belong to, so progress reflects real work. */
+const SECTION_STAGE = { business: STAGE.BUSINESS, dna: STAGE.POSITIONING, positioning: STAGE.POSITIONING, needs: STAGE.AUDIENCE, category: STAGE.MARKET, marketing: STAGE.MARKETING, objectives: STAGE.SYNTHESIS, assessment: STAGE.SYNTHESIS };
 
 /* ---------- small helpers ---------- */
 const clamp = (v, n) => String(v == null ? "" : v).slice(0, n).trim();
@@ -218,23 +224,34 @@ RULES THAT MATTER MORE THAN COMPLETENESS
 
 JSON SHAPE
 {
-  "items": [ { "section": "category|positioning|needs", "label": "", "text": "", "provenance": "observed|ai_inferred", "confidence": "Low|Medium|High", "source_url": "", "excerpt": "" } ],
+  "summary": "four or five sentences for the founder: what the business does, what it sells, who it serves, what problem it solves, how it appears to differentiate. Commercial reading, not a paraphrase of their homepage.",
+  "items": [ { "section": "category|positioning|needs|marketing|objectives|assessment", "label": "", "text": "", "provenance": "observed|ai_inferred", "confidence": "Low|Medium|High", "source_url": "", "excerpt": "" } ],
   "competitors": [ { "name": "", "website": "", "kind": "Direct|Indirect|Emerging|Adjacent", "note": "why it competes with this brand", "why": "why you are proposing it", "positioning": "", "value_prop": "", "offering": "", "pricing": "", "audience": "", "messaging": "", "distribution": "", "differentiation": "", "strengths": "", "weaknesses": "", "hq": "", "markets": "", "source_url": "" } ],
   "signals": [ { "kind": "shift|signal|crowded|gap", "category": "consumer|competitor|category|product|regulatory", "event": "", "text": "what is happening, one sentence", "implication": "why it matters", "affects": "", "brand_meaning": "what it could mean for this brand", "excerpt": "", "source_type": "Press|Website|Report|Regulator|Review site|Forum|Other", "source_url": "", "published_at": "YYYY-MM-DD", "country": "", "confidence": "Low|Medium|High", "relevance": "Low|Medium|High", "limits": "what this evidence cannot tell us" } ]
 }
 
-Use these exact labels where you have something to support:
+Use these exact labels:
   category: ${FIELDS.category.join(", ")}
   positioning: ${FIELDS.positioning.join(", ")}
   needs: ${FIELDS.needs.join(", ")}
+  marketing: ${FIELDS.marketing.join(", ")}
+  objectives: use the label "Observed priority" for a priority public evidence supports, "Inferred priority" for one you are reading from the evidence, and "To validate with the founder" for a question only they can answer. Several items may share a label. Put the objective itself in "text".
+  assessment: ${FIELDS.assessment.join(", ")}
 
-Aim for 6 to 14 items, 0 to 8 competitors, 0 to 10 signals. Quality over volume. Return the JSON object only.`;
+ON OBJECTIVES AND ASSESSMENT, THE PART MOST SYSTEMS GET WRONG
+- You cannot see their internal targets. An inferred priority is a hypothesis about what the evidence suggests they are pushing on, never their confirmed objective. Write it as one.
+- "To validate with the founder" is where the honest unknowns go: anything public research cannot settle. Give at least three.
+- The assessment is a reasoned read for this specific business, not a SWOT. Say where they stand, what actually looks strong, what looks fragile, and what you would look into next. If the evidence is thin, say the assessment is thin.
+- Never claim to know conversion rates, ad performance, revenue or internal plans. No data source is connected.
+
+Aim for 8 to 16 items across category, positioning and needs, 3 to 6 marketing items, 4 to 8 objectives across the three labels, all five assessment labels, 0 to 8 competitors, 0 to 10 signals. Quality over volume. Return the JSON object only.`;
 }
 
 /* ---------- validation: anything that cannot be checked is dropped, not patched ---------- */
 const PROV = ["brand_stated", "observed", "ai_inferred"], CONF = ["Low", "Medium", "High"];
+const SECTIONS = Object.keys(FIELDS);
 function cleanItem(r, pageUrls) {
-  const section = oneOf(r.section, Object.keys(FIELDS), null);
+  const section = oneOf(r.section, SECTIONS, null);
   if (!section || !ok(r.label) || !ok(r.text)) return null;
   const provenance = oneOf(r.provenance, PROV, "ai_inferred");
   let source_url = isUrl(r.source_url) ? clamp(r.source_url, 400) : "";
@@ -275,37 +292,38 @@ module.exports = async function handler(req, res) {
     if (!base) throw new Error(`"${brand.website || ""}" is not a web address the engine can open`);
 
     /* ---- stage 0: the brand's own site ---- */
-    say(0, "ok", `reading ${base.host}`);
+    say(STAGE.SITE, "ok", `reading ${base.host}`);
     const rb = await robots(base.origin);
-    say(0, rb.fetched ? "ok" : "warn", rb.fetched ? `robots.txt read · ${rb.rules.length} rule${rb.rules.length === 1 ? "" : "s"} for crawlers` : "no robots.txt found; reading only the pages linked from the homepage");
+    say(STAGE.SITE, rb.fetched ? "ok" : "warn", rb.fetched ? `robots.txt read · ${rb.rules.length} rule${rb.rules.length === 1 ? "" : "s"} for crawlers` : "no robots.txt found; reading only the pages linked from the homepage");
 
     const home = await get(base.toString());
     if (!home.ok) throw new Error(`${base.host} ${home.reason}`);
     const pages = [{ name: "Homepage", url: home.url || base.toString(), text: textOf(home.html) }];
-    say(0, "ok", `homepage read · ${pages[0].text.length} characters of text`);
+    say(STAGE.SITE, "ok", `homepage read · ${pages[0].text.length} characters of text`);
 
     const links = pickLinks(home.html, base);
     for (const [name] of WANTED.slice(1)) {
       if (pages.length >= MAX_PAGES) break;
       const url = links.get(name);
-      if (!url) { say(0, "skip", `${name.toLowerCase()} page: no link found on the homepage`); continue; }
+      if (!url) { say(STAGE.SITE, "skip", `${name.toLowerCase()} page: no link found on the homepage`); continue; }
       const path = new URL(url).pathname;
-      if (!robotsAllows(rb.rules, path)) { say(0, "skip", `${name.toLowerCase()} page: robots.txt asks crawlers not to read ${path}`); continue; }
+      if (!robotsAllows(rb.rules, path)) { say(STAGE.SITE, "skip", `${name.toLowerCase()} page: robots.txt asks crawlers not to read ${path}`); continue; }
       const p = await get(url);
-      if (!p.ok) { say(0, "warn", `${name.toLowerCase()} page ${p.reason} — nothing taken from it`); continue; }
+      if (!p.ok) { say(STAGE.SITE, "warn", `${name.toLowerCase()} page ${p.reason} — nothing taken from it`); continue; }
       const text = textOf(p.html);
       pages.push({ name, url: p.url || url, text });
-      say(0, "ok", `${name.toLowerCase()} page read · ${text.length} characters`);
+      say(STAGE.SITE, "ok", `${name.toLowerCase()} page read · ${text.length} characters`);
     }
-    if (pages.length === 1) say(0, "warn", "only the homepage could be read, so the profile will be thin");
+    if (pages.length === 1) say(STAGE.SITE, "warn", "only the homepage could be read, so the profile will be thin");
 
     /* ---- stage 1: read the pages (cheap model), then think about them (better model) ---- */
     const chars = pages.reduce((t, p) => t + p.text.length, 0);
-    say(1, "ok", `reading ${chars.toLocaleString()} characters with ${MODELS.extract} — the cheapest model that can do literal extraction`);
+    say(STAGE.PRODUCTS, "ok", `reading ${chars.toLocaleString()} characters with ${MODELS.extract} — the cheapest model that can do literal extraction`);
     const ex = asJson((await call(MODELS.extract, { max_tokens: 6000, messages: [{ role: "user", content: extractPrompt(brand, pages) }] }, "extraction")).text, "extraction");
 
     const known = (req.body && req.body.known) || {};
-    say(1, "ok", process.env.RESEARCH_WEB_SEARCH === "0"
+    say(STAGE.AUDIENCE, "ok", `the next five stages come from one analysis call, so they complete together`);
+    say(STAGE.AUDIENCE, "ok", process.env.RESEARCH_WEB_SEARCH === "0"
       ? `analysing with ${MODELS.analyse} · external research is off, so the site alone`
       : `analysing with ${MODELS.analyse} · up to ${SEARCH_USES} web searches${known.labels && known.labels.length ? ` · ${known.labels.length} claims already on file are excluded` : ""}`);
     const aBody = { max_tokens: 8000, messages: [{ role: "user", content: analysePrompt(brand, ex, known) }] };
@@ -314,7 +332,7 @@ module.exports = async function handler(req, res) {
     try { an = asJson((await call(MODELS.analyse, aBody, "analysis")).text, "analysis"); }
     catch (e) {
       if (e.status !== 400 || !aBody.tools) throw e;
-      say(1, "warn", "external research is unavailable on this account, so the profile is built from the site alone");
+      say(STAGE.AUDIENCE, "warn", "external research is unavailable on this account, so the profile is built from the site alone");
       delete aBody.tools;
       an = asJson((await call(MODELS.analyse, aBody, "analysis")).text, "analysis");
     }
@@ -333,36 +351,40 @@ module.exports = async function handler(req, res) {
     const bUpd = {};
     if (ok(out.brand && out.brand.geography) && !ok(brand.geography)) bUpd.geography = clamp(out.brand.geography, 80);
     if (ok(out.brand && out.brand.markets)) bUpd.markets = clamp(out.brand.markets, 160);
-    if (Object.keys(bUpd).length) say(1, "ok", `market read from the site: ${bUpd.geography || brand.geography}${bUpd.markets ? " · also " + bUpd.markets : ""}`, { table: "brands", row: bUpd });
+    if (ok(an.summary)) bUpd.summary = clamp(an.summary, 1400);
+    if (Object.keys(bUpd).length) say(STAGE.BUSINESS, "ok", bUpd.summary ? "brand summary written" : `market read from the site: ${bUpd.geography || brand.geography}`, { table: "brands", row: bUpd });
 
-    let n = 0;
+    const counts = {};
     for (const raw of (out.items || [])) {
       const row = cleanItem(raw, pageUrls); if (!row) continue;
-      n++; say(1, "ok", `${row.label.toLowerCase()} — ${row.provenance.replace("_", " ")}`, { table: "brand_profile_items", row });
+      const st = SECTION_STAGE[row.section] != null ? SECTION_STAGE[row.section] : STAGE.BUSINESS;
+      counts[st] = (counts[st] || 0) + 1;
+      say(st, "ok", `${row.label.toLowerCase()} — ${row.provenance.replace("_", " ")}`, { table: "brand_profile_items", row });
     }
-    say(1, n ? "ok" : "warn", n ? `${n} claims filed, each as a candidate for your review` : "nothing could be established from the pages read");
+    for (const [st, label] of [[STAGE.BUSINESS, "the business"], [STAGE.AUDIENCE, "the audience"], [STAGE.POSITIONING, "positioning"], [STAGE.MARKET, "the market"], [STAGE.MARKETING, "marketing presence"], [STAGE.SYNTHESIS, "objectives and assessment"]])
+      say(st, counts[st] ? "ok" : "warn", counts[st] ? `${counts[st]} findings about ${label}` : `nothing could be established about ${label} from what is public`);
 
     for (const p of (out.products || [])) {
       if (!ok(p.name)) continue;
-      say(1, "ok", `product: ${clamp(p.name, 60)}`, { table: "products_services", row: {
+      say(STAGE.PRODUCTS, "ok", `product: ${clamp(p.name, 60)}`, { table: "products_services", row: {
         name: clamp(p.name, 120), category: clamp(p.category, 80), description: clamp(p.description, 600), features: clamp(p.features, 400),
         benefits: clamp(p.benefits, 400), problem: clamp(p.problem, 400), pricing: clamp(p.pricing, 160), differentiator: clamp(p.differentiator, 400),
         provenance: oneOf(p.provenance, PROV, "brand_stated"), source_url: isUrl(p.source_url) ? clamp(p.source_url, 400) : "" } });
     }
     for (const a of (out.audiences || [])) {
       if (!ok(a.description)) continue;
-      say(1, "ok", `intended audience: ${clamp(a.name || a.description, 60)}`, { table: "audience_profiles", row: {
+      say(STAGE.AUDIENCE, "ok", `intended audience: ${clamp(a.name || a.description, 60)}`, { table: "audience_profiles", row: {
         kind: "intended", name: clamp(a.name, 80), description: clamp(a.description, 600), demographics: clamp(a.demographics, 300),
         geography: clamp(a.geography, 200), motivations: clamp(a.motivations, 400), pains: clamp(a.pains, 400), triggers: clamp(a.triggers, 400),
         objections: clamp(a.objections, 400), behaviour: clamp(a.behaviour, 400), basis: "",
         provenance: oneOf(a.provenance, PROV, "ai_inferred"), source_url: isUrl(a.source_url) ? clamp(a.source_url, 400) : "" } });
     }
-    say(1, "warn", "who actually buys is still unknown: that can only come from your own customer data");
+    say(STAGE.AUDIENCE, "warn", "who actually buys is still unknown: that can only come from your own customer data");
 
-    /* ---- stage 2: competitors, as candidates ---- */
+    /* ---- competitors, as candidates: part of market context ---- */
     const comps = (out.competitors || []).filter(c => ok(c.name));
     for (const c of comps) {
-      say(2, "ok", `candidate: ${clamp(c.name, 60)}`, { table: "competitors", row: {
+      say(STAGE.MARKET, "ok", `candidate: ${clamp(c.name, 60)}`, { table: "competitors", row: {
         name: clamp(c.name, 120), website: clamp(c.website, 200), category: clamp(c.category, 120),
         kind: oneOf(c.kind, ["Direct", "Indirect", "Emerging", "Adjacent"], "Direct"), status: "candidate",
         note: clamp(c.note, 400), why: clamp(c.why, 300), positioning: clamp(c.positioning, 300), value_prop: clamp(c.value_prop, 300),
@@ -371,13 +393,13 @@ module.exports = async function handler(req, res) {
         weaknesses: clamp(c.weaknesses, 300), hq: clamp(c.hq, 80), markets: clamp(c.markets, 200),
         source_url: isUrl(c.source_url) ? clamp(c.source_url, 400) : "", placed_by: "engine" } });
     }
-    say(2, comps.length ? "ok" : "skip", comps.length ? `${comps.length} candidate${comps.length === 1 ? "" : "s"} — none enters the competitive set until you confirm it` : "no competitor could be named from a source");
+    say(STAGE.MARKET, comps.length ? "ok" : "skip", comps.length ? `${comps.length} candidate${comps.length === 1 ? "" : "s"} — none enters the competitive set until you confirm it` : "no competitor could be named from a source");
 
     /* ---- stage 3: signals ---- */
     const sigs = (out.signals || []).filter(s => ok(s.text));
     for (const s of sigs) {
       const provenance = isUrl(s.source_url) ? "observed" : "ai_inferred";
-      say(3, "ok", clamp(s.text, 90), { table: "market_signals", row: {
+      say(STAGE.MARKET, "ok", clamp(s.text, 90), { table: "market_signals", row: {
         kind: oneOf(s.kind, ["shift", "signal", "crowded", "gap"], "signal"),
         category: oneOf(s.category, ["consumer", "competitor", "category", "product", "regulatory"], "category"),
         event: clamp(s.event, 60), text: clamp(s.text, 500), implication: clamp(s.implication, 400), affects: clamp(s.affects, 300),
@@ -386,14 +408,13 @@ module.exports = async function handler(req, res) {
         country: clamp(s.country, 60), confidence: oneOf(s.confidence, CONF, "Low"), relevance: oneOf(s.relevance, CONF, "Medium"),
         limits: clamp(s.limits, 300), provenance } });
     }
-    say(3, sigs.length ? "ok" : "skip", sigs.length ? `${sigs.length} signal${sigs.length === 1 ? "" : "s"} with a source` : "no sourced signal was found for this category");
+    say(STAGE.MARKET, sigs.length ? "ok" : "skip", sigs.length ? `${sigs.length} signal${sigs.length === 1 ? "" : "s"} with a source` : "no sourced signal was found for this category");
 
-    /* ---- stage 4 ---- */
-    say(4, "skip", "Opportunities are framed by a person from this evidence. Nothing is framed automatically.");
-    say(4, "ok", `routing: ${MODELS.extract} read the pages, ${MODELS.analyse} did the analysis. Opus was not used.`);
+    say(STAGE.SYNTHESIS, "skip", "Opportunities are framed by a person from this evidence. Nothing is framed automatically.");
+    say(STAGE.SYNTHESIS, "ok", `routing: ${MODELS.extract} read the pages, ${MODELS.analyse} did the analysis. Opus was not used.`);
     res.end();
   } catch (e) {
-    say(0, "warn", `Run failed: ${e.message || e}`);
+    say(STAGE.SITE, "warn", `Run failed: ${e.message || e}`);
     res.end();
   }
 };

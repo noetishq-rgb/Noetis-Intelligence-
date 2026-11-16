@@ -133,10 +133,33 @@ success metric into the strategy builder, and stops there.
 
 ## Automatic brand research
 
-Give the engine a name, a website and a category and it fills the brand profile itself: it reads
-the brand's own pages, researches the category from outside sources, and files everything as
-**candidates**. Nothing it finds enters the profile until a person confirms it on the review
-screen — confirm, edit or reject each claim, then continue to Competitive Intelligence.
+Three inputs — name, website, category — and one button, **Analyse brand**. There is no long form.
+NOETIS reads the brand's own pages, researches the category from outside sources, and comes back
+with a brand intelligence report written for the founder: *Here's what we understood about X*.
+Nothing it finds enters the profile until a person confirms it.
+
+**The run** moves through eight stages that reflect real work: accessing the website, understanding
+products and services, analysing the business model, researching the audience, analysing
+positioning, exploring market context, reviewing public marketing presence, synthesising. A stage
+that found nothing says so; a page that could not be read is listed as unread, not analysed. Five of
+the stages come from a single analysis call and complete together, and the run log says so rather
+than animating progress that is not happening.
+
+**The report** opens with a summary of what the business does, sells, serves, solves and claims to
+differentiate on, then eight chapters: business overview, product and value proposition, target
+audience, brand positioning, market context, marketing presence, business and marketing objectives,
+and an initial strategic assessment. Objectives are deliberately kept in three groups — what we
+observed, what we inferred, and what we recommend validating with the founder — because public
+research cannot see an internal target and should not pretend to.
+
+**Everything is editable in place.** Select Edit on any finding, correct it, save. The correction is
+filed as founder-confirmed and the original research is kept underneath it, visible on demand — an
+edit is never a silent erasure. Add what the research missed at the end of any chapter, confirm a
+chapter at a time or the whole profile at once, and leave sections unconfirmed if you want to.
+
+**A later run cannot undo your decisions.** A confirmed finding is never overwritten; if new
+research contradicts it, it arrives as a **proposed update** with Accept or Keep mine. Rejected
+findings stay on file as rejected so the same claim is not proposed again as though it were new.
 
 The engine is `api/research.js` in this repository, a serverless function. It cannot run in the
 browser: a browser is not allowed to read another company's site, and an API key cannot live in a
@@ -174,6 +197,11 @@ candidate still waiting is refreshed in place rather than duplicated.
 
 **Without the engine** the app says so plainly and falls back to the six-step onboarding, prefilled
 with whatever you typed. It never fabricates a profile to fill the gap.
+
+**One honest limitation:** the run streams into the browser tab that started it, so closing that tab
+stops it. Everything found up to that point is already saved, and returning shows the report with a
+notice that the run did not finish and an option to research again. A background job queue would fix
+this properly and is not built.
 
 ## Running it
 

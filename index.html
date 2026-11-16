@@ -188,7 +188,7 @@ class SupabaseStore {
    An engine is an async generator yielding events:
      { stage: 0-4, kind: "ok" | "skip" | "warn", msg, write?: { table, row, links?: [signal keys] } }
    The runner saves each write as it arrives and never overwrites a user-confirmed record. */
-const STAGES = ["Reading the website", "Building the brand profile", "Mapping competitors", "Listening for signals", "Framing opportunities"];
+const STAGES = ["Accessing the brand website", "Understanding products and services", "Analysing the business model", "Researching the audience", "Analysing brand positioning", "Exploring market context", "Reviewing public marketing presence", "Synthesising brand intelligence"];
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const list = s => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
 
@@ -404,7 +404,7 @@ const DEMO = {
 
 /* ---------- 4. App --------------------------------------------------- */
 let store;
-const S = { route: "home", db: {}, brandId: null, run: null, wiz: null, drawer: null, strategyId: null, chapter: "overview", evFilter: "All", evQ: "", oppFilter: "Open", oppSort: "priority", oq: "", oppGeo: "All", oppAud: "All", oppProd: "All", oppCatF: "All", oppFeas: "Any", weights: { impact: 2, feasibility: 1, fit: 1, urgency: 1, confidence: 1 }, metaLevel: "campaign", panelOpen: false, open: {}, reviewAfterRun: false, quick: { name: "", website: "", category: "", geography: "", err: "" }, feedView: "open", covAll: false, cmp: [], cq: "", rq: "", ff: { comp: "All", event: "All", rel: "All" }, bq: "", saved: false, rr: { topic: "", category: "", geography: "", segment: "", period: "Last 90 days", focus: "Category structure" }, sigView: "overview", oppType: "All", sigKind: "All", metaTab: "overview", metaSim: true, sb: { opp: "", goal: "", channel: "Meta", funnel: "Consideration", market: "", budget: "", timeframe: "", measure: "" }, canvasF: { strength: "Any", urgency: "Any", horizon: "Any", impact: "Any" }, lf: { kind: "All", geo: "All", aud: "All", price: "All" }, wx: "price", wy: "approach", cell: null, globe: { lon: 78, lat: 18, zoom: 1, cat: "All", time: "All", region: "All", iso: null }, needsSignIn: false, bootError: "", loading: true };
+const S = { route: "home", db: {}, brandId: null, run: null, wiz: null, drawer: null, strategyId: null, chapter: "overview", evFilter: "All", evQ: "", oppFilter: "Open", oppSort: "priority", oq: "", oppGeo: "All", oppAud: "All", oppProd: "All", oppCatF: "All", oppFeas: "Any", weights: { impact: 2, feasibility: 1, fit: 1, urgency: 1, confidence: 1 }, metaLevel: "campaign", panelOpen: false, open: {}, editing: null, chapterOpen: {}, reviewAfterRun: false, quick: { name: "", website: "", category: "", geography: "", err: "" }, feedView: "open", covAll: false, cmp: [], cq: "", rq: "", ff: { comp: "All", event: "All", rel: "All" }, bq: "", saved: false, rr: { topic: "", category: "", geography: "", segment: "", period: "Last 90 days", focus: "Category structure" }, sigView: "overview", oppType: "All", sigKind: "All", metaTab: "overview", metaSim: true, sb: { opp: "", goal: "", channel: "Meta", funnel: "Consideration", market: "", budget: "", timeframe: "", measure: "" }, canvasF: { strength: "Any", urgency: "Any", horizon: "Any", impact: "Any" }, lf: { kind: "All", geo: "All", aud: "All", price: "All" }, wx: "price", wy: "approach", cell: null, globe: { lon: 78, lat: 18, zoom: 1, cat: "All", time: "All", region: "All", iso: null }, needsSignIn: false, bootError: "", loading: true };
 TABLES.forEach(t => { S.db[t] = []; });
 const $ = id => document.getElementById(id);
 const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -414,7 +414,7 @@ const find = (table, id) => S.db[table].find(x => x.id === id);
 const when = t => t ? new Date(t).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
 const day = t => t ? new Date(t).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }) : "No date";
 const L3 = ["Low", "Medium", "High"], HORIZON = ["Now", "Next", "Later"];
-const PROV = { brand_stated: ["Brand-stated", ""], observed: ["Publicly observed", ""], user_confirmed: ["User-confirmed", "ok"], ai_inferred: ["AI-inferred", "ai"], unverified: ["Hypothesis", "warn"] };
+const PROV = { brand_stated: ["Brand-stated", ""], observed: ["Publicly observed", ""], user_confirmed: ["Founder-confirmed", "ok"], founder_provided: ["Founder-provided", "ok"], ai_inferred: ["AI-inferred", "ai"], unverified: ["Unverified", "warn"] };
 const KINDS = { strength: "Strength", gap: "Gap", crowded: "Crowded space", underused: "Underused asset", shift: "External shift", whitespace: "Whitespace hypothesis", threat: "Threat or risk", signal: "Emerging signal" };
 const CATS = { consumer: "Consumer", competitor: "Competitor", category: "Category", product: "Product", regulatory: "Regulatory" };
 const CAT_COLOR = { consumer: "#F6E7C1", competitor: "#E0A068", category: "#9A9E76", product: "#FCF8EF", regulatory: "#9673E3" };
@@ -426,17 +426,22 @@ const CI = [["ci", "Overview"], ["discovery", "Competitor discovery"], ["profile
 const COMP_KINDS = ["Direct", "Indirect", "Emerging", "Adjacent"];
 /* What kind of event a signal records. Separate from its subject category. */
 const EVENTS = ["Product launch", "Pricing change", "Campaign", "Repositioning", "Market entry", "Distribution expansion", "Partnership", "Funding", "Acquisition", "Technology development", "Regulatory change", "Consumer behaviour shift", "Organisational change", "Other"];
-const CHAPTERS = [["overview", "Brand overview"], ["website", "Website intelligence"], ["dna", "Brand DNA"], ["business", "Business model"], ["products", "Products and services"], ["audience", "Audience intelligence"], ["positioning", "Positioning intelligence"], ["market", "Market intelligence"], ["evidence", "Sources and evidence"]];
+const CHAPTERS = [["overview", "Brand overview"], ["website", "Website intelligence"], ["business", "Business model"], ["products", "Products and services"], ["audience", "Audience intelligence"], ["dna", "Brand DNA"], ["positioning", "Positioning intelligence"], ["market", "Market intelligence"], ["marketing", "Marketing presence"], ["objectives", "Objectives"], ["assessment", "Strategic assessment"], ["evidence", "Sources and evidence"]];
 /* Which record section each chapter writes to, and the fields it expects to hold. A field with
    nothing on file is shown as missing rather than hidden, so the gaps are visible. */
-const CH_SECTION = { dna: "dna", business: "business", positioning: "positioning", audience: "needs", market: "category" };
+const CH_SECTION = { dna: "dna", business: "business", positioning: "positioning", audience: "needs", market: "category", marketing: "marketing", objectives: "objectives", assessment: "assessment" };
 const FIELDS = {
   dna: ["Purpose", "Mission", "Vision", "Brand promise", "Values", "Personality", "Tone of voice", "Messaging pillars", "Visual identity"],
   business: ["What the business is", "Business model", "Revenue model", "Problem it solves", "Business objectives", "Growth priority", "Business stage"],
   positioning: ["Positioning statement", "Value proposition", "Differentiators", "Price position", "Perceived strengths", "Perceived weaknesses", "Messaging consistency", "Positioning gaps", "Repositioning to consider"],
   needs: ["Customer needs", "Motivations", "Pain points", "Purchase triggers", "Objections", "Buying behaviour"],
-  category: ["Market overview", "Category developments", "Consumer behaviour shifts", "Industry trends", "Demand patterns", "Pricing movements", "Regulatory or technology change", "Geographic differences"]
+  category: ["Market overview", "Category developments", "Consumer behaviour shifts", "Industry trends", "Demand patterns", "Pricing movements", "Regulatory or technology change", "Geographic differences"],
+  marketing: ["Website assessment", "Public social presence", "Visible marketing channels", "Content themes", "Public campaigns", "Distribution and acquisition signals", "Partnerships", "Marketing gaps"],
+  objectives: ["Observed priority", "Inferred priority", "To validate with the founder"],
+  assessment: ["Where the brand stands today", "Strongest visible advantages", "Potential challenges", "Where positioning could improve", "What deserves further investigation"]
 };
+/* Objectives hold several findings under one label, so they are grouped rather than one-per-row. */
+const MULTI_SECTIONS = ["objectives"];
 const WEB_PAGES = [["Homepage", ["/"]], ["About", ["about", "story", "who-we-are"]], ["Products and services", ["product", "shop", "range", "service"]], ["Pricing", ["pricing", "price", "plans"]], ["FAQ", ["faq", "help", "support"]], ["Contact", ["contact", "stockist", "find-us"]]];
 const RESEARCH_FOCUS = ["Category structure", "Consumer behaviour", "Competitor activity", "Pricing and packaging", "Distribution", "Regulation and compliance", "Technology and formats"];
 const CHANNELS = [["Meta", "meta"], ["Google Search", "planned"], ["Reddit", "planned"], ["TikTok", "planned"], ["Email and CRM", "planned"], ["Retail and marketplaces", "planned"]];
@@ -504,13 +509,21 @@ async function startRun(b) {
            candidate that is still waiting is refreshed in place rather than duplicated. */
         const settled = x => x.provenance === "user_confirmed" || x.status === "confirmed" || x.status === "rejected";
         const have = await store.list(table, { brand_id: b.id });
-        const same = { brand_profile_items: x => x.section === row.section && x.label === row.label,
+        const same = {
+          /* Most sections hold one finding per label. Objectives hold several, so there they match
+             on the finding itself, or a run would overwrite its own results. */
+          brand_profile_items: x => x.section === row.section && x.label === row.label && (!MULTI_SECTIONS.includes(row.section) || x.text === row.text),
           products_services: x => x.name.toLowerCase() === String(row.name || "").toLowerCase(),
           audience_profiles: x => x.kind === row.kind && (x.name || "") === (row.name || ""),
           competitors: x => x.name.toLowerCase() === String(row.name || "").toLowerCase(),
           market_signals: x => x.text === row.text || (row.source_url && x.source_url === row.source_url) }[table];
         const prior = same ? have.find(same) : null;
         const mineAlready = !!prior && settled(prior);
+        if (mineAlready && table === "brand_profile_items" && prior.status !== "rejected" && clean.text && clean.text !== prior.text && clean.text !== prior.proposed_text) {
+          await store.update(table, prior.id, { proposed_text: clean.text, proposed_at: now(), proposed_source: clean.source_url || "" });
+          S.run.log.push({ stage: ev.stage, kind: "warn", msg: `proposed update to your "${prior.label}" — your version stands until you accept it` });
+          if (S.route === "run") render(); continue;
+        }
         if (prior && !mineAlready) { await store.update(table, prior.id, clean); if (key) keys[key] = prior.id; S.run.saved++;
           S.run.log.push({ stage: ev.stage, kind: ev.kind, msg: ev.msg }); if (S.route === "run") render(); continue; }
         if (mineAlready) { S.run.kept++; S.run.log.push({ stage: ev.stage, kind: "skip", msg: `already on file, left alone: ${row.label || row.name || row.kind || "record"}` }); if (S.route === "run") render(); continue; }
@@ -912,7 +925,8 @@ function sectionsFor(area, b, f) {
     return { act: "sigView", key: "to", items: SIGV.map(([k, l]) => [k, l, n[k] != null ? `<span class="small muted">${n[k]}</span>` : ""]), on: to => S.sigView === to }; }
   if (area === "brand") { const waiting = f.items.filter(i => i.status === "candidate").length;
     const done = sec => FIELDS[sec].filter(l => f.items.some(i => i.section === sec && i.label === l && i.status !== "rejected")).length + "/" + FIELDS[sec].length;
-    const badge = { overview: "", website: String(f.items.filter(i => i.source_url).length || "—"), dna: done("dna"), business: done("business"), products: String(f.products.length || "—"), audience: f.aud.length + " · " + done("needs"), positioning: done("positioning"), market: done("category"), evidence: String(f.items.length + f.products.length + f.aud.length + f.comps.length + f.signals.length) };
+    const count = sec => String(f.items.filter(i => i.section === sec && i.status !== "rejected").length || "—");
+    const badge = { overview: "", website: String(f.items.filter(i => i.source_url).length || "—"), dna: done("dna"), business: done("business"), products: String(f.products.length || "—"), audience: f.aud.length + " · " + done("needs"), positioning: done("positioning"), market: done("category"), marketing: done("marketing"), objectives: count("objectives"), assessment: done("assessment"), evidence: String(f.items.length + f.products.length + f.aud.length + f.comps.length + f.signals.length) };
     const items = CHAPTERS.map(([k, l]) => { const needs = CH_SECTION[k] && f.items.some(i => i.section === CH_SECTION[k] && i.status === "candidate"); return [k, l, `<span class="small" style="color:${needs ? "var(--warn)" : "var(--muted)"}">${needs ? "review" : badge[k]}</span>`]; });
     if (waiting) return { act: "chapter", key: "to", items, on: to => S.route === "brand" && S.chapter === to,
       before: `<button class="nv sub ${S.route === "review" ? "on" : ""}" data-act="nav" data-to="review"><span>Review discovery</span><span class="small" style="color:var(--warn)">${waiting}</span></button>` };
@@ -949,12 +963,18 @@ const P = {
     return ctx + dims + compFilters + research; },
   brand(b, f) { const ch = S.chapter, sec = CH_SECTION[ch], rr = S.rr;
     if (S.route === "review") { const cand = f.items.filter(i => i.status === "candidate"), done = f.items.filter(i => i.status !== "candidate");
-      const by = p => cand.filter(i => i.provenance === p).length;
-      return pg("Review", `<div class="row" style="gap:10px;flex-wrap:nowrap"><span class="bar" style="flex:1"><i style="width:${f.items.length ? done.length / f.items.length * 100 : 0}%;background:var(--butter)"></i></span><strong class="small">${done.length}/${f.items.length}</strong></div>
-        ${[["brand_stated", "the brand states"], ["observed", "from outside sources"], ["ai_inferred", "read between the lines"]].map(([p, l]) => by(p) ? `<div class="row between small"><span>${by(p)} ${l}</span><button class="link small" data-act="confirmAll" data-v="${p}">Confirm</button></div>` : "").join("")}
-        ${cand.length ? `<button class="go" data-act="confirmAll" data-v="all">Confirm all ${cand.length}</button>` : `<button class="go" data-act="finishReview">Save and continue →</button>`}`)
-        + pg("The run", `<div class="small">${esc(b.website)}</div><div class="small muted">${S.run && S.run.brandId === b.id ? `${S.run.saved} records · run ${esc(S.run.status)} · ${esc(S.run.engine)} engine` : "Last run " + (b.last_run_at ? when(b.last_run_at) : "not recorded")}</div><button class="link small" data-act="nav" data-to="run">See the run log</button><button class="link small" data-act="rerun">Run discovery again</button>`)
-        + pg("How to read this", '<p class="small muted">Nothing here is in the profile yet. Confirming makes a claim yours, and a later run will not overwrite it. Rejecting keeps it on file as rejected rather than deleting it, so the same claim is not proposed again as if it were new.</p>'); }
+      const by = p => cand.filter(i => i.provenance === p).length, props = f.items.filter(i => i.proposed_text).length;
+      const chapters = REPORT.map(([key, title]) => { const l = chapterItems(f, key), waiting = l.filter(i => i.status === "candidate").length;
+        return `<button class="nv pn" data-act="jumpChapter" data-v="${key}"><span>${title}</span><span class="small" style="color:${waiting ? "var(--warn)" : l.length ? "var(--olive)" : "var(--muted)"}">${waiting ? waiting : l.length ? "✓" : "—"}</span></button>`; }).join("");
+      return pg("Review status", `<div class="row" style="gap:10px;flex-wrap:nowrap"><span class="bar" style="flex:1"><i style="width:${f.items.length ? done.length / f.items.length * 100 : 0}%;background:var(--butter)"></i></span><strong class="small">${done.length}/${f.items.length}</strong></div>
+        <div class="small ${b.confirmed_at ? "" : "muted"}">${b.confirmed_at ? `Confirmed ${day(b.confirmed_at)} by ${esc(b.confirmed_by || "you")}` : "Awaiting founder review"}</div>
+        ${props ? `<div class="small" style="color:var(--warn)">${props} proposed update${props === 1 ? "" : "s"} from a later run</div>` : ""}
+        ${cand.length ? `<button class="go" data-act="confirmAll" data-v="all">Confirm all ${cand.length}</button>` : ""}
+        <button class="${cand.length ? "ghost" : "go"}" data-act="confirmProfile">${b.confirmed_at ? "Re-confirm the profile" : "Confirm brand profile"}</button>`)
+        + pg("Chapters", chapters)
+        + pg("Confirm in bulk", [["brand_stated", "the brand states"], ["observed", "from outside sources"], ["ai_inferred", "read between the lines"]].map(([p, l]) => by(p) ? `<div class="row between small"><span>${by(p)} ${l}</span><button class="link small" data-act="confirmAll" data-v="${p}">Confirm</button></div>` : "").join("") || '<p class="small muted">Nothing left to confirm.</p>')
+        + pg("Editing", '<p class="small muted">Select Edit on any finding to correct it in place. Your version is kept as yours and what the research found is kept underneath it. Add anything the research missed at the end of each chapter.</p>')
+        + pg("The research run", `<div class="small">${esc(b.website)}</div><div class="small muted">${S.run && S.run.brandId === b.id ? `${S.run.saved} records · ${esc(S.run.status)} · ${esc(S.run.engine)} engine` : "Last run " + (b.last_run_at ? when(b.last_run_at) : "not recorded")}</div><button class="link small" data-act="nav" data-to="run">See the run log</button><button class="link small" data-act="rerun">Research again</button><p class="small muted">A later run never overwrites what you confirmed. Anything that contradicts you arrives as a proposed update.</p>`); }
     const search = pg("Search this profile", `<input class="field" id="bq" value="${esc(S.bq)}" placeholder="Claim, source or word"><p class="small muted">Filters the section on the right.</p>`);
     const add = sec ? `<button class="ghost" data-act="addField" data-section="${sec}">Add to this section</button>` : "";
     const perChapter = {
@@ -1236,7 +1256,7 @@ const findingBlock = (s, open) => `<div class="panel" style="gap:10px"><div clas
 V.quick = function () {
   const q = S.quick, live = !!CONFIG.RESEARCH_ENDPOINT;
   const fld = (k, label, ph, note) => `<label><span class="cap">${label}</span><input class="field" data-q="${k}" value="${esc(q[k])}" placeholder="${esc(ph)}" autocomplete="off" style="min-height:52px;font-size:16px">${note ? `<span class="small muted">${note}</span>` : ""}</label>`;
-  return `${head("Add a brand", "Three things, and the engine does the rest.")}
+  return `${head("Add a brand", "Three things. NOETIS does the research.")}
     <div class="split"><div class="col" style="gap:18px">
       <div class="col" style="gap:16px;max-width:620px">
         ${fld("name", "Brand name", "e.g. AURELIA")}
@@ -1244,7 +1264,7 @@ V.quick = function () {
         ${fld("category", "Category", "e.g. Skincare", "What it competes in, not the industry. Used to judge which competitors and signals are relevant.")}
         ${fld("geography", "Primary market (optional)", "e.g. India", "Left blank, the engine takes it from the site if the site says.")}
         ${q.err ? `<div class="err">${esc(q.err)}</div>` : ""}
-        ${live ? `<button class="go" data-act="runQuick" style="min-height:52px;font-size:16px">Research this brand →</button>
+        ${live ? `<button class="go" data-act="runQuick" style="min-height:52px;font-size:16px">Analyse brand →</button>
           <p class="small muted">It reads the site, researches the category from external sources, and files everything as <strong>candidates</strong>. Nothing becomes part of the profile until you review it on the next screen. It takes a minute or two.</p>`
         : `<div class="sunk col" style="gap:10px;align-items:flex-start"><div class="row" style="gap:8px"><span class="tag warn">Research engine not connected</span></div>
             <p class="small">${ENGINE.found ? esc(ENGINE.reason) : "No discovery engine answers at <span class=\"mono\">/api/research</span> on this deployment."} Automatic research cannot run from the browser alone: a browser is not allowed to read another company's site, and an API key cannot live in a page anyone can view. Until the engine is deployed, nothing can be fetched, and nothing will be invented in its place.</p>
@@ -1258,38 +1278,90 @@ V.quick = function () {
         <div class="panel"><div class="cap">Engine</div><p class="small">${engineNote()}</p>${routingNote()}${CONFIG.RESEARCH_ENDPOINT ? "" : '<button class="link small" data-act="nav" data-to="data">Deployment steps</button>'}</div></div></div>`;
 };
 
-/* The screen between a run and the profile: nothing the engine found is part of the brand's
-   record until it is confirmed here. */
+/* The research report. Nothing the engine found is part of the brand's record until it is
+   confirmed here, every line can be corrected in place, and a correction keeps what was found. */
+const REPORT = [
+  ["business", "Business overview", "What the company does, how it makes money and where.", f => ({ items: f.items.filter(i => i.section === "business") })],
+  ["product", "Product and value proposition", "What it sells, what that does for a customer, and why it claims to be different.", f => ({ products: f.products, items: f.items.filter(i => i.section === "positioning" && ["Value proposition", "Differentiators", "Price position"].includes(i.label)) })],
+  ["audience", "Target audience", "Who it is for, what they need, and what would stop them buying.", f => ({ auds: f.aud, items: f.items.filter(i => i.section === "needs") })],
+  ["positioning", "Brand positioning", "What it claims to be, and how it sounds when it says it.", f => ({ items: [...f.items.filter(i => i.section === "dna"), ...f.items.filter(i => i.section === "positioning" && !["Value proposition", "Differentiators", "Price position"].includes(i.label))] })],
+  ["market", "Market context", "What is happening around it in its own category.", f => ({ items: f.items.filter(i => i.section === "category"), signals: f.signals })],
+  ["marketing", "Marketing presence", "What its public marketing shows from the outside.", f => ({ items: f.items.filter(i => i.section === "marketing") })],
+  ["objectives", "Business and marketing objectives", "Kept in three groups, because public research cannot see an internal target.", f => ({ items: f.items.filter(i => i.section === "objectives") })],
+  ["assessment", "Initial strategic assessment", "A reasoned read of where the brand stands, from the findings above.", f => ({ items: f.items.filter(i => i.section === "assessment") })]
+];
+const chapterItems = (f, key) => { const g = (REPORT.find(c => c[0] === key) || [])[3]; if (!g) return []; const p = g(f); return (p.items || []).filter(i => i.status !== "rejected"); };
+const editing = id => S.editing && S.editing.id === id;
+
+function finding(r, opts = {}) {
+  if (editing(r.id)) return `<div class="item" style="background:var(--s3)"><div style="flex:1 1 150px;max-width:210px"><div class="cap">${esc(r.label)}</div>${r.original_text ? '<div class="small muted">edited</div>' : ""}</div>
+    <div class="col" style="flex:999 1 340px;min-width:0;gap:8px"><textarea class="field" id="inlineEdit" style="min-height:92px;font-size:15.5px">${esc(S.editing.value)}</textarea>
+      <div class="row" style="gap:6px"><button class="go" style="min-height:34px" data-act="inlineSave">Save</button><button class="pill" data-act="inlineCancel">Cancel</button>
+        <span class="small muted">Saving records this as yours. What the research found is kept underneath.</span></div></div></div>`;
+  const prop = r.proposed_text ? `<div class="sunk col" style="gap:6px;margin-top:6px"><div class="row" style="gap:8px"><span class="tag warn">Proposed update</span><span class="small muted">A later run found something different. Your version stands until you accept.</span></div>
+    <div class="small">${esc(r.proposed_text)}</div><div class="row" style="gap:6px"><button class="pill" data-act="acceptProposed" data-id="${r.id}">Accept the update</button><button class="pill" data-act="dismissProposed" data-id="${r.id}">Keep mine</button></div></div>` : "";
+  return `<div class="item ${r.status === "rejected" ? "off" : ""}"><div style="flex:1 1 150px;max-width:210px"><div class="cap">${esc(r.label)}</div>
+      ${opts.section ? `<div class="small muted">${esc(SECTION_NAME[r.section] || r.section)}</div>` : ""}</div>
+    <div class="col" style="flex:999 1 320px;min-width:0;gap:6px"><div style="font-size:15.5px">${esc(r.text)}</div>
+      ${r.excerpt ? `<div class="small muted" style="border-left:2px solid var(--line2);padding-left:10px">“${esc(r.excerpt)}”</div>` : ""}
+      <div class="row" style="gap:8px">${provTag(r.provenance)}${r.status === "confirmed" ? '<span class="tag ok">Confirmed by you</span>' : ""}<span class="small muted">${esc(r.confidence || "—")} confidence</span>${src(r)}</div>
+      ${r.original_text ? `<details class="small muted"><summary style="cursor:pointer">You edited this. What the research found:</summary><div style="padding:6px 0 0 10px;border-left:2px solid var(--line2)">${esc(r.original_text)}</div></details>` : ""}
+      ${prop}</div>
+    <div class="row" style="gap:6px">${r.status !== "confirmed" ? `<button class="pill" data-act="status" data-table="brand_profile_items" data-id="${r.id}" data-v="confirmed">Confirm</button>` : ""}
+      <button class="pill" data-act="inlineEdit" data-id="${r.id}">Edit</button>
+      ${r.status !== "rejected" ? `<button class="pill" data-act="status" data-table="brand_profile_items" data-id="${r.id}" data-v="rejected">Reject</button>` : `<button class="pill" data-act="status" data-table="brand_profile_items" data-id="${r.id}" data-v="candidate">Restore</button>`}</div></div>`;
+}
+
 V.review = function () {
   const b = brand(); if (!b) return noBrand(); const f = facts(b.id);
   const cand = f.items.filter(i => i.status === "candidate"), done = f.items.filter(i => i.status !== "candidate");
-  const prods = f.products, auds = f.aud.filter(x => x.kind === "intended"), comps = f.comps.filter(c => c.status === "candidate");
-  const stated = cand.filter(i => i.provenance === "brand_stated"), inferred = cand.filter(i => i.provenance === "ai_inferred"), observed = cand.filter(i => i.provenance === "observed");
-  const row = r => `<div class="item"><div style="flex:1 1 150px;max-width:210px"><div class="cap">${esc(r.label)}</div><div class="small muted">${esc(SECTION_NAME[r.section] || r.section)}</div></div>
-    <div class="col" style="flex:999 1 320px;min-width:0;gap:6px"><div style="font-size:15.5px">${esc(r.text)}</div>
-      ${r.excerpt ? `<div class="small muted" style="border-left:2px solid var(--line2);padding-left:10px">“${esc(r.excerpt)}”</div>` : ""}
-      <div class="row" style="gap:8px">${provTag(r.provenance)}<span class="small muted">${esc(r.confidence)} confidence</span>${src(r)}</div></div>
-    <div class="row" style="gap:6px"><button class="pill" data-act="status" data-table="brand_profile_items" data-id="${r.id}" data-v="confirmed">Confirm</button><button class="pill" data-act="edit" data-table="brand_profile_items" data-id="${r.id}">Edit</button><button class="pill" data-act="status" data-table="brand_profile_items" data-id="${r.id}" data-v="rejected">Reject</button></div></div>`;
-  const group = (title, blurb, list2) => list2.length ? `<div class="col"><div class="row between"><h2>${title}</h2><span class="small muted">${list2.length}</span></div><p class="muted small">${blurb}</p><div>${list2.map(row).join("")}</div></div>` : "";
-  const pct = f.items.length ? Math.round(done.length / f.items.length * 100) : 0;
-  return `${head("Review what the engine found", cand.length ? "Does this match what you know?" : "Review finished.", demoTag(b))}
-    <p class="muted" style="max-width:820px;margin-top:-10px">Everything below was read from ${esc(b.website)} or researched from outside sources. None of it is part of ${esc(b.name)}'s profile yet. Confirm what is right, correct what is close, reject what is wrong — what you confirm becomes yours and is never overwritten by a later run.</p>
-    <div class="banner"><div class="row" style="gap:16px;flex:1"><span class="bar" style="flex:1;max-width:260px"><i style="width:${pct}%;background:var(--butter)"></i></span><span class="small">${done.length} of ${f.items.length} reviewed</span></div>
-      ${cand.length ? `<div class="row" style="gap:6px">${stated.length ? `<button class="pill" data-act="confirmAll" data-v="brand_stated">Confirm the ${stated.length} the brand states</button>` : ""}<button class="go" data-act="confirmAll" data-v="all">Confirm all ${cand.length}</button></div>`
-        : `<button class="go" data-act="finishReview">Save and continue to Competitive Intelligence →</button>`}</div>
-    ${cand.length ? "" : `<div class="sunk col" style="align-items:flex-start"><h3>Nothing left to review</h3><p class="muted">${done.length} claim${done.length === 1 ? "" : "s"} confirmed or rejected. The profile is live in Brand &amp; Market Intelligence, and the competitor candidates are waiting in Competitive Intelligence.</p><div class="row" style="gap:8px"><button class="go" data-act="finishReview">Continue to Competitive Intelligence →</button><button class="ghost" data-act="chapter" data-to="overview">Open the brand profile</button></div></div>`}
-    ${group("What the brand says about itself", "Taken from its own pages, with the sentence it came from. These are usually right, but a brand describing itself is still a claim, not a fact.", stated)}
-    ${group("Found in outside sources", "Each one carries the source it came from. Open it before confirming.", observed)}
-    ${group("Read between the lines", "Nothing states these: they are the engine's reading of the evidence. Treat them as the weakest thing on this page.", inferred)}
-    ${prods.length ? `<div class="col"><div class="row between"><h2>Products and services</h2><span class="small muted">${prods.length}</span></div><p class="muted small">Taken from the site. Correct a price or a description here and it is filed as yours.</p>
-      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start">${prods.map(p => `<div class="panel" style="gap:6px"><div class="row between"><span style="font-weight:600">${esc(p.name)}</span>${provTag(p.provenance)}</div><div class="small">${esc(p.description) || '<span class="muted">No description</span>'}</div>${p.pricing ? `<div class="small muted">${esc(p.pricing)}</div>` : ""}<div class="row" style="gap:6px"><button class="pill" data-act="edit" data-table="products_services" data-id="${p.id}">Edit</button><button class="pill" data-act="del" data-table="products_services" data-id="${p.id}">Remove</button></div></div>`).join("")}</div></div>` : ""}
-    ${auds.length ? `<div class="col"><div class="row between"><h2>Who the brand says it is for</h2><span class="small muted">${auds.length}</span></div>
-      <p class="muted small">Intended audience only. Who actually buys cannot be read off a website, so it stays unknown until you add it from your own data.</p>
-      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start">${auds.map(x => `<div class="panel" style="gap:6px"><div class="row between"><span style="font-weight:600">${esc(x.name) || "Intended audience"}</span>${provTag(x.provenance)}</div><div class="small">${esc(x.description)}</div><div class="row" style="gap:6px"><button class="pill" data-act="confirmAud" data-id="${x.id}">Confirm</button><button class="pill" data-act="edit" data-table="audience_profiles" data-id="${x.id}">Edit</button><button class="pill" data-act="del" data-table="audience_profiles" data-id="${x.id}">Remove</button></div></div>`).join("")}</div></div>` : ""}
-    ${comps.length ? `<div class="col"><div class="row between"><h2>Competitor candidates</h2><span class="small muted">${comps.length}</span></div><p class="muted small">Judged in Competitive Intelligence, not here, so the decision sits beside the rest of the competitive set. None of them is in it yet.</p>
+  const props = f.items.filter(i => i.proposed_text), comps = f.comps.filter(c => c.status === "candidate");
+  const running = S.run && S.run.brandId === b.id && S.run.status === "running";
+  const chapterDone = key => { const l = chapterItems(f, key); return l.length > 0 && !l.some(i => i.status === "candidate"); };
+  const chapter = ([key, title, blurb, get], n) => { const p = get(f), items = (p.items || []).filter(i => i.status !== "rejected"), open = S.chapterOpen[key] !== false;
+    const waiting = items.filter(i => i.status === "candidate").length;
+    const bodyFor = () => {
+      if (key === "objectives") return ["Observed priority", "Inferred priority", "To validate with the founder"].map(l => { const rows = items.filter(i => i.label === l);
+        const note = { "Observed priority": "Supported by public evidence.", "Inferred priority": "A reading of the evidence, not a stated objective.", "To validate with the founder": "Only you or your own data can settle these." }[l];
+        return `<div class="col" style="gap:4px;margin-top:10px"><div class="row between"><span style="font-weight:600">${l === "To validate with the founder" ? "What we recommend validating" : l === "Observed priority" ? "What we observed" : "What we inferred"}</span><span class="small muted">${rows.length}</span></div><p class="small muted">${note}</p>
+          ${rows.length ? rows.map(r => finding(r)).join("") : '<div class="sunk"><p class="small muted">None recorded.</p></div>'}
+          <div><button class="dash" data-act="addField" data-section="objectives" data-label="${esc(l)}">+ Add one</button></div></div>`; }).join("");
+      let out = items.length ? items.map(r => finding(r)).join("") : `<div class="sunk"><p class="muted">Nothing was established here. That is a gap, not a zero — add what you know.</p></div>`;
+      if (p.products) out = `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(290px,1fr));align-items:start;margin-bottom:14px">${p.products.map(pr => `<div class="panel" style="gap:6px"><div class="row between"><span style="font-weight:600">${esc(pr.name)}</span>${provTag(pr.provenance)}</div>
+        ${[["What it is", pr.description], ["Features", pr.features], ["Benefits", pr.benefits], ["Problem it solves", pr.problem], ["Pricing", pr.pricing], ["Different because", pr.differentiator]].filter(x => x[1]).map(x => `<div><div class="cap">${x[0]}</div><div class="small">${esc(x[1])}</div></div>`).join("") || '<div class="small muted">Nothing beyond the name was found on the site.</div>'}
+        <div class="row" style="gap:6px"><button class="pill" data-act="edit" data-table="products_services" data-id="${pr.id}">Edit</button><button class="pill" data-act="del" data-table="products_services" data-id="${pr.id}">Remove</button></div></div>`).join("") || '<div class="sunk"><p class="muted">No product or service was found on the site.</p></div>'}</div>
+        <div style="margin-bottom:10px"><button class="dash" data-act="add" data-table="products_services">+ Add a product or service</button></div>` + out;
+      if (p.auds) out = `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(290px,1fr));align-items:start;margin-bottom:14px">${p.auds.map(x => `<div class="panel" style="gap:6px"><div class="row between"><span style="font-weight:600">${esc(x.name) || (x.kind === "observed" ? "Observed audience" : "Intended audience")}</span><span class="row" style="gap:6px">${provTag(x.provenance)}<span class="tag">${x.kind === "observed" ? "observed" : "intended"}</span></span></div>
+        <div class="small">${esc(x.description)}</div>${[["Demographics", x.demographics], ["Where", x.geography], ["Motivations", x.motivations], ["Pain points", x.pains]].filter(y => y[1]).map(y => `<div><div class="cap">${y[0]}</div><div class="small">${esc(y[1])}</div></div>`).join("")}
+        <div class="row" style="gap:6px">${x.provenance !== "user_confirmed" ? `<button class="pill" data-act="confirmAud" data-id="${x.id}">Confirm</button>` : ""}<button class="pill" data-act="edit" data-table="audience_profiles" data-id="${x.id}">Edit</button><button class="pill" data-act="del" data-table="audience_profiles" data-id="${x.id}">Remove</button></div></div>`).join("") || '<div class="sunk"><p class="muted">No audience could be read from the site.</p></div>'}</div>
+        <div class="row" style="gap:8px;margin-bottom:10px"><button class="dash" data-act="add" data-table="audience_profiles" data-kind="intended">+ Add a segment</button><button class="dash" data-act="add" data-table="audience_profiles" data-kind="observed">+ Add who actually buys</button></div>
+        <p class="small muted" style="margin-bottom:8px">Who actually buys cannot be read off a website. Anything here marked observed came from you.</p>` + out;
+      if (p.signals) out += `<div class="sunk col" style="gap:6px;margin-top:12px"><div class="cap">Evidence behind this chapter</div><div class="small">${p.signals.length} signal${p.signals.length === 1 ? "" : "s"} on file, each with its source and limits.</div><div><button class="link small" data-act="nav" data-to="moves">Open the signal feed</button></div></div>`;
+      return out;
+    };
+    return `<div class="col" id="ch-${key}"><div class="row between" style="border-top:1px solid var(--line2);padding-top:16px">
+        <div class="row" style="gap:12px;align-items:baseline"><span class="serif" style="font-size:26px;color:var(--sand)">${n + 1}</span><div><h2>${title}</h2><p class="muted small">${blurb}</p></div></div>
+        <div class="row" style="gap:6px">${chapterDone(key) ? '<span class="tag ok">Confirmed</span>' : waiting ? `<button class="pill" data-act="confirmChapter" data-v="${key}">Confirm this chapter (${waiting})</button>` : ""}
+          <button class="pill" data-act="toggleChapter" data-v="${key}">${open ? "Collapse" : "Expand"}</button></div></div>
+      ${open ? bodyFor() : `<p class="small muted">${items.length} finding${items.length === 1 ? "" : "s"}, collapsed.</p>`}
+      <div><button class="dash" data-act="addField" data-section="${CH_SECTION[key] || (key === "product" ? "positioning" : key)}">+ Add something the research missed</button></div></div>`; };
+  return `${head("Brand intelligence report", `Here's what we understood about ${esc(b.name)}.`, `<div class="row">${demoTag(b)}${b.confirmed_at ? `<span class="tag ok">Confirmed ${day(b.confirmed_at)}</span>` : '<span class="tag warn">Awaiting founder review</span>'}</div>`)}
+    ${!running && b.status === "researching" ? `<div class="banner" style="border-color:var(--warn)"><div><strong>The last run did not finish.</strong> <span class="muted">Everything it had found by then is below and was saved. Research runs in your browser tab, so closing it stops the run — there is no background job yet.</span></div><button class="go" data-act="rerun">Research again</button></div>` : ""}
+    ${running ? `<div class="banner"><div><strong>Research is still running.</strong> <span class="muted">${S.run.saved} findings so far. This page fills in as it goes.</span></div><button class="ghost" data-act="nav" data-to="run">Watch the run</button></div>` : ""}
+    ${b.summary ? `<div class="sunk col" style="gap:8px"><div class="row between"><span class="cap">In short</span><button class="link small" data-act="editSummary">Edit</button></div><p style="font-size:17px;line-height:1.55;max-width:860px">${esc(b.summary)}</p>
+      <p class="small muted">${esc(b.name)} · ${esc(b.category)} · ${esc(b.geography) || "market not stated"}${b.markets ? ", also " + esc(b.markets) : ""} · researched from ${esc(b.website)}${b.last_run_at ? " on " + day(b.last_run_at) : ""}</p></div>`
+      : `<div class="sunk"><p class="muted">No summary was written${running ? " yet" : ", because the analysis step did not complete"}.</p></div>`}
+    <div class="banner"><div class="row" style="gap:16px;flex:1;align-items:center"><span class="bar" style="flex:1;max-width:240px"><i style="width:${f.items.length ? done.length / f.items.length * 100 : 0}%;background:var(--butter)"></i></span>
+        <span class="small">${done.length} of ${f.items.length} findings reviewed${props.length ? ` · ${props.length} proposed update${props.length === 1 ? "" : "s"}` : ""}</span></div>
+      <div class="row" style="gap:6px">${cand.length ? `<button class="pill" data-act="confirmAll" data-v="brand_stated">Confirm what the brand states</button><button class="pill" data-act="confirmAll" data-v="all">Confirm all ${cand.length}</button>` : ""}
+        <button class="go" data-act="confirmProfile">${b.confirmed_at ? "Re-confirm the profile" : "Confirm brand profile"}</button></div></div>
+    <p class="small muted" style="margin-top:-10px;max-width:860px">Every line below can be corrected in place, and correcting one keeps what the research found underneath it. Confirming marks it as yours: a later run will not overwrite it, and anything it finds that contradicts you arrives as a proposed update instead.</p>
+    ${REPORT.map(chapter).join("")}
+    ${comps.length ? `<div class="col" style="border-top:1px solid var(--line2);padding-top:16px"><h2>Competitor candidates</h2><p class="muted small">Judged in Competitive Intelligence so the decision sits beside the rest of the set. None of them is in it yet.</p>
       <div class="row" style="gap:6px;flex-wrap:wrap">${comps.map(c => `<button class="chip" data-act="openComp" data-id="${c.id}">${esc(c.name)}<span class="muted" style="display:block;font-size:12px">${esc(c.kind)}</span></button>`).join("")}</div>
       <div><button class="ghost" data-act="nav" data-to="discovery">Review them in Competitive Intelligence →</button></div></div>` : ""}
-    ${f.signals.length ? `<div class="col"><h2>Signals filed as evidence</h2><p class="muted small">${f.signals.length} on file, each with its source and limits. They are evidence, not claims about this brand, so they are reviewed where they are used.</p><div><button class="ghost" data-act="nav" data-to="moves">Open the signal feed →</button></div></div>` : ""}`;
+    <div class="banner" style="margin-top:8px"><div class="small">${b.confirmed_at ? `Confirmed by ${esc(b.confirmed_by || "you")} on ${day(b.confirmed_at)}. This profile is what every other module reads.` : "Nothing is lost if you confirm with sections still unreviewed — they stay marked as unconfirmed."}</div>
+      <div class="row" style="gap:6px"><button class="ghost" data-act="chapter" data-to="overview">Open the full profile</button><button class="go" data-act="finishReview">Continue to Competitive Intelligence →</button></div></div>`;
 };
 
 V.brand = function () {
@@ -1300,7 +1372,8 @@ V.brand = function () {
   const card = (cap, text, to2, extra) => `<button class="card" data-act="chapter" data-to="${to2}" style="gap:6px;align-items:flex-start"><span class="cap">${cap}</span><span style="font-size:15.5px;${text ? "" : "color:var(--muted)"}">${esc(text) || "Not on file"}</span>${extra || ""}</button>`;
   const body = {
     overview: () => { const segs = f.aud.filter(x => x.description), mix = [["Confirmed by you", f.items.filter(i => i.status === "confirmed").length, "var(--olive)"], ["Stated or observed", f.items.filter(i => i.status !== "confirmed" && i.provenance !== "ai_inferred").length, "var(--line2)"], ["Inferred", f.items.filter(i => i.provenance === "ai_inferred" && i.status !== "confirmed").length, "var(--iris)"]], tot = Math.max(1, mix.reduce((t, x) => t + x[1], 0));
-      return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+      return `${b.summary ? `<div class="sunk col" style="gap:8px"><div class="row between"><span class="cap">What we understood</span><button class="link small" data-act="editSummary">Edit</button></div><p style="font-size:16.5px;max-width:820px">${esc(b.summary)}</p><p class="small muted">Written by the research run from the evidence on file${b.reviewed_at ? ", and kept after your review" : " and not yet reviewed"}.</p></div>` : ""}
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
         ${card("Summary", val("business", "What the business is"), "business")}
         ${card("Business model", val("business", "Business model"), "business")}
         ${card("Industry and category", b.category, "overview", `<span class="small muted">Primary market: ${esc(b.geography)}${b.markets ? " · also " + esc(b.markets) : ""}</span>`)}
@@ -1341,6 +1414,17 @@ V.brand = function () {
     positioning: () => { const gaps = f.signals.filter(s => ["whitespace", "crowded"].includes(s.kind));
       return `<p class="muted small">How the brand is positioned, and where that positioning is thin. See it against competitors on the <button class="link small" data-act="nav" data-to="whitespace">white-space map</button>.</p>${fieldBlock(f, "positioning", FIELDS.positioning)}
         <div class="col" style="margin-top:14px"><h2>From the competitive map</h2><p class="muted small">Crowded spaces and open territories recorded in Competitive Intelligence.</p>${gaps.length ? `<div>${gaps.map(sigRow).join("")}</div>` : '<div class="sunk"><p class="muted">Nothing recorded yet.</p></div>'}</div>`; },
+    marketing: () => `<p class="muted small">What the brand's public marketing says and shows, as far as it can be observed from outside. Nothing here comes from an ad account: none is connected.</p>${fieldBlock(f, "marketing", FIELDS.marketing)}`,
+    objectives: () => { const by = l => f.items.filter(i => i.section === "objectives" && i.label === l && i.status !== "rejected");
+      const block = (l, title, blurb, tone) => { const rows = by(l);
+        return `<div class="col"><div class="row between"><h2>${title}</h2><span class="small muted">${rows.length}</span></div><p class="muted small">${blurb}</p>
+          ${rows.length ? `<div>${rows.map(r => itemRow(r)).join("")}</div>` : `<div class="sunk"><p class="muted">None recorded.</p></div>`}
+          <div><button class="dash" data-act="addField" data-section="objectives" data-label="${esc(l)}">+ Add ${tone}</button></div></div>`; };
+      return `<p class="muted" style="max-width:800px">What this brand appears to be pushing on. Public research cannot see internal targets, so these are kept in three groups and never merged into one list of "goals".</p>
+        ${block("Observed priority", "What we observed", "Supported by public evidence: something the brand is visibly doing or saying.", "an observed priority")}
+        ${block("Inferred priority", "What we inferred", "A reading of the evidence, not a stated objective. Treat each as a hypothesis until the founder says otherwise.", "an inferred priority")}
+        ${block("To validate with the founder", "What we recommend validating", "Questions only the founder or your own data can answer. Answering one here turns it into founder-confirmed context the whole product uses.", "a question to validate")}`; },
+    assessment: () => `<p class="muted" style="max-width:800px">A reasoned read of where this brand stands, written from the findings on file rather than a template. Every line is editable, and an empty one means the evidence did not support a view.</p>${fieldBlock(f, "assessment", FIELDS.assessment)}`,
     market: () => { const finds = f.signals.filter(s => ["shift", "signal", "threat", "crowded"].includes(s.kind) && hit(s.text + s.implication)), reqs = of("research_requests");
       return `<p class="muted small">What is happening in the category, and what it could mean here. Configure and run research from the left.</p>${fieldBlock(f, "category", FIELDS.category)}
         <div class="col" style="margin-top:16px"><div class="row between"><h2>Research findings</h2><span class="small muted">${finds.length} on file${b.is_demo ? " · DEMO DATA" : ""}</span></div>
@@ -1599,7 +1683,7 @@ function form(title, fields, onSave, action, intro) {
 
 const F = (name, label, value, extra = {}) => ({ name, label, value: value || "", ...extra });
 const conf = r => F("confidence", "Confidence", r.confidence || "Medium", { type: "select", options: L3 });
-const SECTION_NAME = { dna: "brand DNA", business: "the business model", positioning: "positioning", needs: "audience needs", category: "market intelligence", identity: "identity and assets" };
+const SECTION_NAME = { dna: "brand DNA", business: "the business model", positioning: "positioning", needs: "audience needs", category: "market intelligence", marketing: "marketing presence", objectives: "objectives", assessment: "the strategic assessment", identity: "identity and assets" };
 /* One definition per table: what it is called, how a row is named, which fields the form shows. */
 const T = {
   brand_profile_items: { label: "claim", name: r => r.label, fields: r => [F("label", "What this is about", r.label, { required: true }), F("text", "The claim", r.text, { type: "area", required: true }), F("excerpt", "Evidence excerpt (the words it came from)", r.excerpt, { type: "area" }), conf(r), F("source_url", "Source link (optional)", r.source_url)], onSave: v => ({ ...v, provenance: "user_confirmed", status: "confirmed" }) },
@@ -1671,6 +1755,36 @@ const A = {
   toOnboarding: () => { const q = S.quick; S.wiz = loadDraft();
     Object.assign(S.wiz.d, { name: q.name.trim() || S.wiz.d.name, website: q.website.trim() || S.wiz.d.website, category: q.category.trim() || S.wiz.d.category, geography: q.geography.trim() || S.wiz.d.geography });
     S.wiz.step = QS.findIndex(x => !answered(x, S.wiz.d)); if (S.wiz.step < 0) S.wiz.step = QS.length; saveDraft(); go("new"); focusWiz(); },
+  inlineEdit: d => { const r = find("brand_profile_items", d.id); S.editing = { id: d.id, value: r.text }; render();
+    setTimeout(() => { const n = $("inlineEdit"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 30); },
+  inlineCancel: () => { S.editing = null; render(); },
+  inlineSave: () => { const e = S.editing; if (!e) return; const r = find("brand_profile_items", e.id), text = String(e.value || "").trim();
+    if (!text) return toast("Give it some text, or reject the finding instead.");
+    S.editing = null;
+    if (text === r.text) return render();
+    /* A correction is kept as yours, and what the research found is kept underneath it. */
+    mutate(() => store.update("brand_profile_items", e.id, { text, status: "confirmed", provenance: "user_confirmed",
+      original_text: r.original_text || r.text, original_provenance: r.original_provenance || r.provenance,
+      edited_at: now(), edited_by: store.user ? store.user.email : "You", proposed_text: "" }),
+      `Corrected "${r.label}" on the brand profile`, "Saved as yours. The original is kept underneath."); },
+  jumpChapter: d => { S.chapterOpen[d.v] = true; render(); setTimeout(() => { const n = $("ch-" + d.v); n && n.scrollIntoView({ behavior: "smooth", block: "start" }); }, 40); },
+  toggleChapter: d => { S.chapterOpen[d.v] = S.chapterOpen[d.v] === false; render(); },
+  confirmChapter: d => { const f = facts(S.brandId), rows = chapterItems(f, d.v).filter(i => i.status === "candidate");
+    if (!rows.length) return;
+    mutate(async () => { for (const r of rows) await store.update("brand_profile_items", r.id, { status: "confirmed" }); },
+      `Confirmed the ${d.v} chapter (${rows.length} findings)`, `${rows.length} confirmed. A later run will not overwrite them.`); },
+  confirmProfile: () => { const b = brand(), f = facts(b.id), left = f.items.filter(i => i.status === "candidate").length;
+    form("Confirm the brand profile", [F("note", "Anything to record about this version (optional)", "", { type: "area" })],
+      v => store.update("brands", b.id, { confirmed_at: now(), confirmed_by: store.user ? store.user.email : "You", confirm_note: v.note, status: "ready" }),
+      "Brand profile confirmed", left ? `${left} finding${left === 1 ? " is" : "s are"} still unreviewed. They stay on file as unconfirmed, and confirming now does not hide them.` : "Every finding has been reviewed. This becomes the brand context every other module reads."); },
+  editSummary: () => { const b = brand();
+    form("What we understood", [F("summary", "The summary, in your words", b.summary, { type: "area", required: true })],
+      v => store.update("brands", b.id, { summary: v.summary, summary_edited: true }), "Edited the brand summary", "This is the first thing anyone reads about the brand."); },
+  acceptProposed: d => { const r = find("brand_profile_items", d.id);
+    mutate(() => store.update("brand_profile_items", d.id, { text: r.proposed_text, proposed_text: "", original_text: r.original_text || r.text, status: "confirmed", provenance: "user_confirmed", edited_at: now(), edited_by: store.user ? store.user.email : "You" }),
+      `Accepted a proposed update to "${r.label}"`, "Updated. Your previous version is kept underneath."); },
+  dismissProposed: d => { const r = find("brand_profile_items", d.id);
+    mutate(() => store.update("brand_profile_items", d.id, { proposed_text: "" }), `Kept the existing "${r.label}" over a proposed update`, "Kept yours."); },
   confirmAll: d => { const f = facts(S.brandId), rows = f.items.filter(i => i.status === "candidate" && (d.v === "all" || i.provenance === d.v));
     if (!rows.length) return; mutate(async () => { for (const r of rows) await store.update("brand_profile_items", r.id, { status: "confirmed" }); },
       `Confirmed ${rows.length} claims from the discovery run`, `${rows.length} confirmed. They are yours now, and a later run will not overwrite them.`); },
@@ -1851,6 +1965,7 @@ document.addEventListener("input", e => { const t = e.target;
   if (t.dataset && t.dataset.w && S.wiz) { S.wiz.d[t.dataset.w] = t.value; saveDraft(); }
   if (t.dataset && t.dataset.sb) S.sb[t.dataset.sb] = t.value;
   if (t.dataset && t.dataset.rr) S.rr[t.dataset.rr] = t.value;
+  if (t.id === "inlineEdit") { if (S.editing) S.editing.value = t.value; return; }
   if (t.dataset && t.dataset.q) { S.quick[t.dataset.q] = t.value; return; }
   if (t.dataset && t.dataset.w5) return A.w5(t.dataset.w5, t.value);
   if (["evQ", "bq", "cq", "rq", "oq"].includes(t.id)) { const id = t.id, pos = t.selectionStart; ({ evQ: () => S.evQ = t.value, bq: () => S.bq = t.value, cq: () => S.cq = t.value, rq: () => S.rq = t.value, oq: () => S.oq = t.value })[id](); render(); const n = $(id); if (n) { n.focus(); n.setSelectionRange(pos, pos); } } });
