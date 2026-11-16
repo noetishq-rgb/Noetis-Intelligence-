@@ -607,7 +607,7 @@ const QLABEL = {}; QS.forEach(q => (q.fields || []).forEach(f => { QLABEL[f[0]] 
 /* ----- shared pieces ----- */
 const head = (cap, title, right = "") => `<div class="row between" style="align-items:flex-end;gap:16px"><div class="col" style="gap:4px;max-width:860px"><div class="cap">${cap}</div><h1>${title}</h1></div>${right}</div>`;
 const emptyState = (title, text, act, to, label) => `<div class="sunk col" style="align-items:flex-start;padding:28px"><h2>${title}</h2><p class="muted" style="max-width:560px">${text}</p>${label ? `<button class="go" data-act="${act}" data-to="${to || ""}">${label}</button>` : ""}</div>`;
-const noBrand = () => emptyState("No brand selected", "Onboard a client and the workspace opens here.", "nav", "new", "Onboard a client");
+const noBrand = () => emptyState("No brand selected", "Add a client and the workspace opens here.", "nav", "quick", "Add a brand");
 const subnav = () => "";
 const lv = (label, v) => `<span class="small"><span class="muted">${label}</span> <strong>${esc(v)}</strong></span>`;
 const pick = (label, key, val, opts) => `<label class="small" style="flex-direction:row;align-items:center;gap:8px"><span class="muted">${label}</span><select class="field" style="width:auto;min-height:36px" data-sel="${key}">${opts.map(o => `<option value="${esc(Array.isArray(o) ? o[0] : o)}" ${val === (Array.isArray(o) ? o[0] : o) ? "selected" : ""}>${esc(Array.isArray(o) ? o[1] : o)}</option>`).join("")}</select></label>`;
@@ -690,7 +690,7 @@ const V = {
       <div class="row"><button class="go" data-act="wizNext">Continue →</button>${i > 0 ? '<button class="ghost" data-act="wizBack">Back</button>' : '<button class="ghost" data-act="nav" data-to="home">Cancel</button>'}${q.req ? "" : '<button class="link" data-act="wizSkip">Skip — I don\'t know</button>'}<span class="small muted hide-s" style="margin-left:auto">Step ${gi + 1} of 6 · question ${nth} of ${inGroup.length}${q.area || q.opts || q.fields ? "" : ' · press <span class="kbd">Enter</span> to continue'}</span></div>`;
   },
   run() {
-    const r = S.run; if (!r) return emptyState("No discovery run in progress", "Onboard a client to start one.", "nav", "new", "Onboard a client");
+    const r = S.run; if (!r) return emptyState("No discovery run in progress", "Add a brand to start one.", "nav", "quick", "Add a brand");
     const running = r.status === "running";
     const stages = STAGES.map((label, i) => { const lines = r.log.filter(l => l.stage === i), skipped = lines.length && lines.every(l => l.kind === "skip");
       const state = i > r.stage || (!lines.length && !running) ? "Queued" : i === r.stage && running ? "Working…" : skipped ? "Skipped" : "Done";
@@ -795,7 +795,7 @@ V.home = function () {
   const demoPanel = `<div class="panel" style="border-color:var(--butter)"><span class="tag ai" style="align-self:flex-start">DEMO</span><h2>Open the demo workspace</h2><p class="muted">A fictional brand with everything filled in: competitor map, white-space analysis, located signals, opportunities, a strategy and illustrative Meta data. Every item is labelled as demo, and it can be reset or removed in one step.</p><div><button class="go" data-act="loadDemo">Open the demo</button></div></div>`;
   const onboard = `<div class="panel"><span class="tag" style="align-self:flex-start">Your client</span><h2>Add a brand</h2><p class="muted">Name, website, category. The engine reads the site, researches the category from outside sources, and files everything as candidates for you to confirm, correct or reject. ${CONFIG.RESEARCH_ENDPOINT ? "" : "<strong>The engine is not connected on this deployment</strong>, so for now the questions are the way in."}</p><div class="row" style="gap:8px"><button class="${S.db.brands.length ? "go" : "ghost"}" data-act="nav" data-to="quick">Add a brand →</button><button class="link small" data-act="nav" data-to="new">Answer the questions instead</button></div></div>`;
   if (!S.db.brands.length) return `${head("Workspace", "Start with a brand")}<p class="muted" style="max-width:640px;margin-top:-14px">NOETIS reads a brand once and uses that understanding everywhere: the competitive landscape, the brand and its market, the opportunities, and the strategy.</p><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">${demoPanel}${onboard}</div>`;
-  return `${head("Workspace", "Brands", `<button class="go" data-act="nav" data-to="new">Onboard a brand</button>`)}<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">${rows}</div>${demo ? "" : `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">${demoPanel}</div>`}`;
+  return `${head("Workspace", "Brands", `<button class="go" data-act="nav" data-to="quick">Add a brand</button>`)}<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">${rows}</div>${demo ? "" : `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">${demoPanel}</div>`}`;
 };
 
 const dataBase = V.data;
@@ -1265,7 +1265,8 @@ V.quick = function () {
         ${fld("geography", "Primary market (optional)", "e.g. India", "Left blank, the engine takes it from the site if the site says.")}
         ${q.err ? `<div class="err">${esc(q.err)}</div>` : ""}
         ${live ? `<button class="go" data-act="runQuick" style="min-height:52px;font-size:16px">Analyse brand →</button>
-          <p class="small muted">It reads the site, researches the category from external sources, and files everything as <strong>candidates</strong>. Nothing becomes part of the profile until you review it on the next screen. It takes a minute or two.</p>`
+          <p class="small muted">It reads the site, researches the category from external sources, and files everything as <strong>candidates</strong>. Nothing becomes part of the profile until you review it on the next screen. It takes a minute or two.</p>
+          <p class="small muted">Rather type it in? <button class="link small" data-act="nav" data-to="new">Answer the onboarding questions instead</button> — the research still runs afterwards, and your answers are never overwritten by it.</p>`
         : `<div class="sunk col" style="gap:10px;align-items:flex-start"><div class="row" style="gap:8px"><span class="tag warn">Research engine not connected</span></div>
             <p class="small">${ENGINE.found ? esc(ENGINE.reason) : "No discovery engine answers at <span class=\"mono\">/api/research</span> on this deployment."} Automatic research cannot run from the browser alone: a browser is not allowed to read another company's site, and an API key cannot live in a page anyone can view. Until the engine is deployed, nothing can be fetched, and nothing will be invented in its place.</p>
             <div class="row" style="gap:8px"><button class="go" data-act="toOnboarding">Fill it in myself instead</button><button class="ghost" data-act="demo">Open the demo to see the full flow</button><button class="ghost" data-act="nav" data-to="data">How to connect the engine</button></div></div>`}
@@ -1715,7 +1716,7 @@ async function copy(text, done) { try { await navigator.clipboard.writeText(text
 
 /* ----- command palette ----- */
 function commands() {
-  const c = [["All brands", () => go("home")], ["Onboard a client", () => go("new")], ["Settings", () => go("data")], ["Activity", () => go("activity")], ["Integrations", () => go("integrations")], ["Meta intelligence", () => go("meta")], ["Strategy builder", () => go("builder")]];
+  const c = [["All brands", () => go("home")], ["Add a brand", () => A.nav({ to: "quick" })], ["Answer the onboarding questions instead", () => A.nav({ to: "new" })], ["Settings", () => go("data")], ["Activity", () => go("activity")], ["Integrations", () => go("integrations")], ["Meta intelligence", () => go("meta")], ["Strategy builder", () => go("builder")]];
   if (brand()) c.unshift(...CI.map(([r, l]) => ["Competitive intelligence: " + l, () => go(r)]), ...CHAPTERS.map(([k, l]) => ["Brand & market: " + l, () => A.chapter({ to: k })]), ["Opportunity signals", () => go("signals")], ["Growth strategy", () => go("strategies")], ["Add a competitor", () => A.add({ table: "competitors" })], ["Add a signal", () => A.add({ table: "market_signals", kind: "signal" })], ["Frame an opportunity", () => A.add({ table: "opportunities" })]);
   S.db.brands.forEach(b => c.push(["Open brand: " + b.name, () => A.openBrand({ id: b.id })]));
   of("competitors").forEach(o => c.push(["Open competitor: " + o.name, () => { S.route = "landscape"; A.openComp({ id: o.id }); }]));
