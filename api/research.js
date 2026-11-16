@@ -324,6 +324,170 @@ function cleanItem(r, pageUrls) {
     source_url, status: "candidate" };
 };
 
+/* The one pipeline. POST streams it as NDJSON; ?run= collects it. Nothing is duplicated. */
+async function runPipeline(brand, known, say) {
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set on this deployment");
+  const base = siteUrl(brand.website);
+  if (!base) throw new Error(`"${brand.website || ""}" is not a web address the engine can open`);
+
+  /* ---- stage 0: discover and crawl the brand's own site ---- */
+  say(STAGE.SITE, "ok", `reading ${base.host}`);
+  const rb = await robots(base.origin);
+  say(STAGE.SITE, rb.fetched ? "ok" : "warn", rb.fetched
+    ? `robots.txt read · ${rb.rules.length} rule${rb.rules.length === 1 ? "" : "s"} for crawlers${rb.sitemaps.length ? ` · ${rb.sitemaps.length} sitemap${rb.sitemaps.length === 1 ? "" : "s"} declared` : ""}`
+    : "no robots.txt found; discovering pages from the sitemap and the homepage's own links");
+
+  const homeRaw = await get(base.toString());
+  if (!homeRaw.ok) throw new Error(`${base.host} ${homeRaw.reason}`);
+  const home = homeRaw, homeRead = await readPage(base.toString());
+  const homeUrl = homeRead.ok ? homeRead.url : (home.url || base.toString());
+
+  /* Candidates come from what the site publishes, never from guessed paths. */
+  const cand = new Map();
+  const offer = (u, via) => { let x; try { x = new URL(u, homeUrl); } catch { return; }
+    if (x.host !== base.host || !/^https?:$/.test(x.protocol)) return;
+    x.hash = ""; const key = x.toString().replace(/\/$/, "");
+    if (key === homeUrl.replace(/\/$/, "")) return;
+    if (SKIP_RE.test(x.pathname + x.search)) return;
+    if ((x.pathname + x.search).length > 140) return;
+    if (!cand.has(key)) cand.set(key, { url: x.toString(), kind: kindOf(x), via });
+  };
+
+  const maps = await sitemapUrls(base, rb.sitemaps);
+  maps.urls.forEach(u => offer(u, "sitemap"));
+  say(STAGE.SITE, maps.urls.length ? "ok" : "skip", maps.urls.length
+    ? `sitemap read · ${maps.urls.length} page${maps.urls.length === 1 ? "" : "s"} published${maps.note ? " · " + maps.note : ""}`
+    : `no sitemap found${maps.note ? " · " + maps.note : ""}; using the homepage's links instead`);
+
+  const fromHome = links(home.html, homeUrl);
+  fromHome.forEach(u => offer(u, "homepage link"));
+  say(STAGE.SITE, "ok", `homepage read · ${fromHome.length} internal links · ${cand.size} candidate page${cand.size === 1 ? "" : "s"} after filtering`);
+
+  /* Pick a spread: the best few of each kind the site actually has. */
+  const picked = [], quota = Object.fromEntries(KINDS.map(([n, , q]) => [n, q]));
+  const score = c => (c.via === "sitemap" ? 0 : 1) + c.url.split("/").length * 0.1;
+  for (const [name] of KINDS) {
+    const l = [...cand.values()].filter(c => c.kind === name).sort((a, c) => score(a) - score(c));
+    for (const c of l.slice(0, quota[name])) if (picked.length < MAX_PAGES - 1) picked.push(c);
+  }
+  if (picked.length < MAX_PAGES - 1)
+    for (const c of [...cand.values()].filter(c => c.kind === "Other page").sort((a, c2) => score(a) - score(c2)))
+      if (picked.length < MAX_PAGES - 1) picked.push(c);
+
+  const pageRow = (url, kind, st, extra) => ({ table: "pages", row: { url, kind, status: st, fetched_at: new Date().toISOString(), ...extra } });
+  const pages = [{ name: "Homepage", url: homeUrl, text: homeRead.ok ? homeRead.text : textOf(home.html), title: homeRead.ok ? homeRead.title : titleOf(home.html) }];
+  say(STAGE.SITE, "ok", `homepage · ${pages[0].title || "no title"} · ${pages[0].text.length} characters`, pageRow(homeUrl, "Homepage", pages[0].text.length < 400 ? "thin" : "ok", { title: pages[0].title, chars: pages[0].text.length, via: "the address you gave", rendered: homeRead.via === "rendered" }));
+
+  for (const c of picked) {
+    const path = new URL(c.url).pathname;
+    if (!robotsAllows(rb.rules, path)) { say(STAGE.SITE, "skip", `${path} · robots.txt asks crawlers not to read it`, pageRow(c.url, c.kind, "skipped", { reason: "robots.txt disallows it", via: c.via })); continue; }
+    const p = await readPage(c.url);
+    if (!p.ok) { say(STAGE.SITE, "warn", `${path} ${p.reason}`, pageRow(c.url, c.kind, "failed", { reason: p.reason, http_status: p.status || null, via: c.via })); continue; }
+    pages.push({ name: c.kind, url: p.url, text: p.text, title: p.title });
+    say(STAGE.SITE, p.thin ? "warn" : "ok", `${c.kind.toLowerCase()} · ${p.title || path} · ${p.text.length} characters${p.via === "rendered" ? " (rendered)" : ""}${p.thin ? " — almost empty" : ""}`,
+      pageRow(p.url, c.kind, p.thin ? "thin" : "ok", { title: p.title, chars: p.text.length, via: c.via, reason: p.thin ? "Returned almost no text; the page is probably built in the browser" : "", rendered: p.via === "rendered" }));
+  }
+  const thin = pages.filter(p => p.text.length < 400);
+  if (pages.length === 1) say(STAGE.SITE, "warn", "only the homepage could be read, so the profile will be thin");
+  if (thin.length) say(STAGE.SITE, "warn", `${thin.length} page${thin.length === 1 ? "" : "s"} returned almost no text — likely rendered by JavaScript. ${process.env.FIRECRAWL_API_KEY ? "" : "A rendering crawler (set FIRECRAWL_API_KEY) would read these."}`);
+
+  /* ---- stage 1: read the pages (cheap model), then think about them (better model) ---- */
+  const chars = pages.reduce((t, p) => t + p.text.length, 0);
+  say(STAGE.PRODUCTS, "ok", `reading ${chars.toLocaleString()} characters with ${MODELS.extract} — the cheapest model that can do literal extraction`);
+  const ex = asJson((await call(MODELS.extract, { max_tokens: 6000, messages: [{ role: "user", content: extractPrompt(brand, pages) }] }, "extraction")).text, "extraction");
+
+  say(STAGE.AUDIENCE, "ok", `the next five stages come from one analysis call, so they complete together`);
+  say(STAGE.AUDIENCE, "ok", process.env.RESEARCH_WEB_SEARCH === "0"
+    ? `analysing with ${MODELS.analyse} · external research is off, so the site alone`
+    : `analysing with ${MODELS.analyse} · up to ${SEARCH_USES} web searches${known.labels && known.labels.length ? ` · ${known.labels.length} claims already on file are excluded` : ""}`);
+  const aBody = { max_tokens: 8000, messages: [{ role: "user", content: analysePrompt(brand, ex, known) }] };
+  if (process.env.RESEARCH_WEB_SEARCH !== "0" && SEARCH_USES > 0) aBody.tools = [{ type: WEB_SEARCH_TOOL, name: "web_search", max_uses: SEARCH_USES }];
+  let an;
+  try { an = asJson((await call(MODELS.analyse, aBody, "analysis")).text, "analysis"); }
+  catch (e) {
+    if (e.status !== 400 || !aBody.tools) throw e;
+    say(STAGE.AUDIENCE, "warn", "external research is unavailable on this account, so the profile is built from the site alone");
+    delete aBody.tools;
+    an = asJson((await call(MODELS.analyse, aBody, "analysis")).text, "analysis");
+  }
+
+  /* Pass 1 says only what the brand says; pass 2 adds what the world says. */
+  const out = {
+    brand: { geography: ex.geography, markets: ex.markets, category: ex.category },
+    items: [...(ex.items || []).map(i => ({ ...i, provenance: "brand_stated", confidence: "High" })), ...(an.items || [])],
+    products: (ex.products || []).map(p => ({ ...p, provenance: "brand_stated" })),
+    audiences: (ex.audiences || []).map(a => ({ ...a, kind: "intended", provenance: "brand_stated" })),
+    competitors: an.competitors || [], signals: an.signals || []
+  };
+  if (ok(ex.social)) out.items.push({ section: "business", label: "Social presence", text: ex.social, provenance: "brand_stated", confidence: "High", source_url: pages[0].url, excerpt: "" });
+  const pageUrls = pages.map(p => p.url);
+
+  const bUpd = {};
+  if (ok(out.brand && out.brand.geography) && !ok(brand.geography)) bUpd.geography = clamp(out.brand.geography, 80);
+  if (ok(out.brand && out.brand.markets)) bUpd.markets = clamp(out.brand.markets, 160);
+  if (ok(an.summary)) bUpd.summary = clamp(an.summary, 1400);
+  if (Object.keys(bUpd).length) say(STAGE.BUSINESS, "ok", bUpd.summary ? "brand summary written" : `market read from the site: ${bUpd.geography || brand.geography}`, { table: "brands", row: bUpd });
+
+  const counts = {};
+  for (const raw of (out.items || [])) {
+    const row = cleanItem(raw, pageUrls); if (!row) continue;
+    const st = SECTION_STAGE[row.section] != null ? SECTION_STAGE[row.section] : STAGE.BUSINESS;
+    counts[st] = (counts[st] || 0) + 1;
+    say(st, "ok", `${row.label.toLowerCase()} — ${row.provenance.replace("_", " ")}`, { table: "brand_profile_items", row });
+  }
+  for (const [st, label] of [[STAGE.BUSINESS, "the business"], [STAGE.AUDIENCE, "the audience"], [STAGE.POSITIONING, "positioning"], [STAGE.MARKET, "the market"], [STAGE.MARKETING, "marketing presence"], [STAGE.SYNTHESIS, "objectives and assessment"]])
+    say(st, counts[st] ? "ok" : "warn", counts[st] ? `${counts[st]} findings about ${label}` : `nothing could be established about ${label} from what is public`);
+
+  for (const p of (out.products || [])) {
+    if (!ok(p.name)) continue;
+    say(STAGE.PRODUCTS, "ok", `product: ${clamp(p.name, 60)}`, { table: "products_services", row: {
+      name: clamp(p.name, 120), category: clamp(p.category, 80), description: clamp(p.description, 600), features: clamp(p.features, 400),
+      benefits: clamp(p.benefits, 400), problem: clamp(p.problem, 400), pricing: clamp(p.pricing, 160), differentiator: clamp(p.differentiator, 400),
+      provenance: oneOf(p.provenance, PROV, "brand_stated"), source_url: isUrl(p.source_url) ? clamp(p.source_url, 400) : "" } });
+  }
+  for (const a of (out.audiences || [])) {
+    if (!ok(a.description)) continue;
+    say(STAGE.AUDIENCE, "ok", `intended audience: ${clamp(a.name || a.description, 60)}`, { table: "audience_profiles", row: {
+      kind: "intended", name: clamp(a.name, 80), description: clamp(a.description, 600), demographics: clamp(a.demographics, 300),
+      geography: clamp(a.geography, 200), motivations: clamp(a.motivations, 400), pains: clamp(a.pains, 400), triggers: clamp(a.triggers, 400),
+      objections: clamp(a.objections, 400), behaviour: clamp(a.behaviour, 400), basis: "",
+      provenance: oneOf(a.provenance, PROV, "ai_inferred"), source_url: isUrl(a.source_url) ? clamp(a.source_url, 400) : "" } });
+  }
+  say(STAGE.AUDIENCE, "warn", "who actually buys is still unknown: that can only come from your own customer data");
+
+  /* ---- competitors, as candidates: part of market context ---- */
+  const comps = (out.competitors || []).filter(c => ok(c.name));
+  for (const c of comps) {
+    say(STAGE.MARKET, "ok", `candidate: ${clamp(c.name, 60)}`, { table: "competitors", row: {
+      name: clamp(c.name, 120), website: clamp(c.website, 200), category: clamp(c.category, 120),
+      kind: oneOf(c.kind, ["Direct", "Indirect", "Emerging", "Adjacent"], "Direct"), status: "candidate",
+      note: clamp(c.note, 400), why: clamp(c.why, 300), positioning: clamp(c.positioning, 300), value_prop: clamp(c.value_prop, 300),
+      offering: clamp(c.offering, 300), pricing: clamp(c.pricing, 160), audience: clamp(c.audience, 200), messaging: clamp(c.messaging, 300),
+      distribution: clamp(c.distribution, 200), differentiation: clamp(c.differentiation, 300), strengths: clamp(c.strengths, 300),
+      weaknesses: clamp(c.weaknesses, 300), hq: clamp(c.hq, 80), markets: clamp(c.markets, 200),
+      source_url: isUrl(c.source_url) ? clamp(c.source_url, 400) : "", placed_by: "engine" } });
+  }
+  say(STAGE.MARKET, comps.length ? "ok" : "skip", comps.length ? `${comps.length} candidate${comps.length === 1 ? "" : "s"} — none enters the competitive set until you confirm it` : "no competitor could be named from a source");
+
+  /* ---- stage 3: signals ---- */
+  const sigs = (out.signals || []).filter(s => ok(s.text));
+  for (const s of sigs) {
+    const provenance = isUrl(s.source_url) ? "observed" : "ai_inferred";
+    say(STAGE.MARKET, "ok", clamp(s.text, 90), { table: "market_signals", row: {
+      kind: oneOf(s.kind, ["shift", "signal", "crowded", "gap"], "signal"),
+      category: oneOf(s.category, ["consumer", "competitor", "category", "product", "regulatory"], "category"),
+      event: clamp(s.event, 60), text: clamp(s.text, 500), implication: clamp(s.implication, 400), affects: clamp(s.affects, 300),
+      brand_meaning: clamp(s.brand_meaning, 400), excerpt: clamp(s.excerpt, 300), source_type: clamp(s.source_type, 40) || "Other",
+      source_url: isUrl(s.source_url) ? clamp(s.source_url, 400) : "", published_at: isDate(s.published_at) ? s.published_at : null,
+      country: clamp(s.country, 60), confidence: oneOf(s.confidence, CONF, "Low"), relevance: oneOf(s.relevance, CONF, "Medium"),
+      limits: clamp(s.limits, 300), provenance } });
+  }
+  say(STAGE.MARKET, sigs.length ? "ok" : "skip", sigs.length ? `${sigs.length} signal${sigs.length === 1 ? "" : "s"} with a source` : "no sourced signal was found for this category");
+
+  say(STAGE.SYNTHESIS, "skip", "Opportunities are framed by a person from this evidence. Nothing is framed automatically.");
+  say(STAGE.SYNTHESIS, "ok", `routing: ${MODELS.extract} read the pages, ${MODELS.analyse} did the analysis. Opus was not used.`);
+}
+
 module.exports = async function handler(req, res) {
   if (req.method === "GET" || req.method === "HEAD") {
     const ready = !!process.env.ANTHROPIC_API_KEY;
@@ -351,6 +515,27 @@ module.exports = async function handler(req, res) {
         candidates: cand.size,
         byKind: Object.fromEntries(Object.entries(byKind).map(([k, v]) => [k, { count: v.length, examples: v.slice(0, 3) }])),
         renderer: process.env.FIRECRAWL_API_KEY ? "firecrawl" : "none" });
+    }
+
+    /* ?run=<url>&name=&category= — the real pipeline over GET, so a run can be verified from
+       outside the app. Same code path as the app uses; it just collects the events instead of
+       streaming them. It does spend model credit, so it is a deliberate test, not a health check. */
+    if (ready && req.query && req.query.run) {
+      const brand = { name: req.query.name || "", website: req.query.run, category: req.query.category || "", geography: req.query.geography || "" };
+      const events = [], rows = {};
+      const say = (stage, kind, msg, write) => { events.push({ stage, kind, msg, table: write && write.table });
+        if (write) (rows[write.table] = rows[write.table] || []).push(write.row); };
+      const t0 = Date.now();
+      try { await runPipeline(brand, {}, say); }
+      catch (e) { events.push({ stage: 0, kind: "warn", msg: `Run failed: ${e.message || e}` }); }
+      const counts = Object.fromEntries(Object.entries(rows).map(([k, v]) => [k, v.length]));
+      return res.status(200).json({ engine: "noetis-research", run: brand.website, seconds: Math.round((Date.now() - t0) / 1000),
+        counts, events, pages: (rows.pages || []).map(p => ({ url: p.url, kind: p.kind, status: p.status, title: p.title, chars: p.chars, via: p.via, reason: p.reason })),
+        summary: (rows.brands || []).map(b => b.summary).filter(Boolean)[0] || "",
+        items: (rows.brand_profile_items || []).map(i => ({ section: i.section, label: i.label, text: i.text, provenance: i.provenance, source_url: i.source_url })),
+        products: (rows.products_services || []).map(p => p.name),
+        competitors: (rows.competitors || []).map(c => ({ name: c.name, kind: c.kind, source_url: c.source_url })),
+        signals: (rows.market_signals || []).map(x => ({ text: x.text, source_url: x.source_url, published_at: x.published_at })) });
     }
 
     /* ?check=models — one token to each routed model, to confirm this account can call them.
@@ -387,167 +572,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set on this deployment");
-    const base = siteUrl(brand.website);
-    if (!base) throw new Error(`"${brand.website || ""}" is not a web address the engine can open`);
-
-    /* ---- stage 0: discover and crawl the brand's own site ---- */
-    say(STAGE.SITE, "ok", `reading ${base.host}`);
-    const rb = await robots(base.origin);
-    say(STAGE.SITE, rb.fetched ? "ok" : "warn", rb.fetched
-      ? `robots.txt read · ${rb.rules.length} rule${rb.rules.length === 1 ? "" : "s"} for crawlers${rb.sitemaps.length ? ` · ${rb.sitemaps.length} sitemap${rb.sitemaps.length === 1 ? "" : "s"} declared` : ""}`
-      : "no robots.txt found; discovering pages from the sitemap and the homepage's own links");
-
-    const homeRaw = await get(base.toString());
-    if (!homeRaw.ok) throw new Error(`${base.host} ${homeRaw.reason}`);
-    const home = homeRaw, homeRead = await readPage(base.toString());
-    const homeUrl = homeRead.ok ? homeRead.url : (home.url || base.toString());
-
-    /* Candidates come from what the site publishes, never from guessed paths. */
-    const cand = new Map();
-    const offer = (u, via) => { let x; try { x = new URL(u, homeUrl); } catch { return; }
-      if (x.host !== base.host || !/^https?:$/.test(x.protocol)) return;
-      x.hash = ""; const key = x.toString().replace(/\/$/, "");
-      if (key === homeUrl.replace(/\/$/, "")) return;
-      if (SKIP_RE.test(x.pathname + x.search)) return;
-      if ((x.pathname + x.search).length > 140) return;
-      if (!cand.has(key)) cand.set(key, { url: x.toString(), kind: kindOf(x), via });
-    };
-
-    const maps = await sitemapUrls(base, rb.sitemaps);
-    maps.urls.forEach(u => offer(u, "sitemap"));
-    say(STAGE.SITE, maps.urls.length ? "ok" : "skip", maps.urls.length
-      ? `sitemap read · ${maps.urls.length} page${maps.urls.length === 1 ? "" : "s"} published${maps.note ? " · " + maps.note : ""}`
-      : `no sitemap found${maps.note ? " · " + maps.note : ""}; using the homepage's links instead`);
-
-    const fromHome = links(home.html, homeUrl);
-    fromHome.forEach(u => offer(u, "homepage link"));
-    say(STAGE.SITE, "ok", `homepage read · ${fromHome.length} internal links · ${cand.size} candidate page${cand.size === 1 ? "" : "s"} after filtering`);
-
-    /* Pick a spread: the best few of each kind the site actually has. */
-    const picked = [], quota = Object.fromEntries(KINDS.map(([n, , q]) => [n, q]));
-    const score = c => (c.via === "sitemap" ? 0 : 1) + c.url.split("/").length * 0.1;
-    for (const [name] of KINDS) {
-      const l = [...cand.values()].filter(c => c.kind === name).sort((a, c) => score(a) - score(c));
-      for (const c of l.slice(0, quota[name])) if (picked.length < MAX_PAGES - 1) picked.push(c);
-    }
-    if (picked.length < MAX_PAGES - 1)
-      for (const c of [...cand.values()].filter(c => c.kind === "Other page").sort((a, c2) => score(a) - score(c2)))
-        if (picked.length < MAX_PAGES - 1) picked.push(c);
-
-    const pageRow = (url, kind, st, extra) => ({ table: "pages", row: { url, kind, status: st, fetched_at: new Date().toISOString(), ...extra } });
-    const pages = [{ name: "Homepage", url: homeUrl, text: homeRead.ok ? homeRead.text : textOf(home.html), title: homeRead.ok ? homeRead.title : titleOf(home.html) }];
-    say(STAGE.SITE, "ok", `homepage · ${pages[0].title || "no title"} · ${pages[0].text.length} characters`, pageRow(homeUrl, "Homepage", pages[0].text.length < 400 ? "thin" : "ok", { title: pages[0].title, chars: pages[0].text.length, via: "the address you gave", rendered: homeRead.via === "rendered" }));
-
-    for (const c of picked) {
-      const path = new URL(c.url).pathname;
-      if (!robotsAllows(rb.rules, path)) { say(STAGE.SITE, "skip", `${path} · robots.txt asks crawlers not to read it`, pageRow(c.url, c.kind, "skipped", { reason: "robots.txt disallows it", via: c.via })); continue; }
-      const p = await readPage(c.url);
-      if (!p.ok) { say(STAGE.SITE, "warn", `${path} ${p.reason}`, pageRow(c.url, c.kind, "failed", { reason: p.reason, http_status: p.status || null, via: c.via })); continue; }
-      pages.push({ name: c.kind, url: p.url, text: p.text, title: p.title });
-      say(STAGE.SITE, p.thin ? "warn" : "ok", `${c.kind.toLowerCase()} · ${p.title || path} · ${p.text.length} characters${p.via === "rendered" ? " (rendered)" : ""}${p.thin ? " — almost empty" : ""}`,
-        pageRow(p.url, c.kind, p.thin ? "thin" : "ok", { title: p.title, chars: p.text.length, via: c.via, reason: p.thin ? "Returned almost no text; the page is probably built in the browser" : "", rendered: p.via === "rendered" }));
-    }
-    const thin = pages.filter(p => p.text.length < 400);
-    if (pages.length === 1) say(STAGE.SITE, "warn", "only the homepage could be read, so the profile will be thin");
-    if (thin.length) say(STAGE.SITE, "warn", `${thin.length} page${thin.length === 1 ? "" : "s"} returned almost no text — likely rendered by JavaScript. ${process.env.FIRECRAWL_API_KEY ? "" : "A rendering crawler (set FIRECRAWL_API_KEY) would read these."}`);
-
-    /* ---- stage 1: read the pages (cheap model), then think about them (better model) ---- */
-    const chars = pages.reduce((t, p) => t + p.text.length, 0);
-    say(STAGE.PRODUCTS, "ok", `reading ${chars.toLocaleString()} characters with ${MODELS.extract} — the cheapest model that can do literal extraction`);
-    const ex = asJson((await call(MODELS.extract, { max_tokens: 6000, messages: [{ role: "user", content: extractPrompt(brand, pages) }] }, "extraction")).text, "extraction");
-
-    const known = (req.body && req.body.known) || {};
-    say(STAGE.AUDIENCE, "ok", `the next five stages come from one analysis call, so they complete together`);
-    say(STAGE.AUDIENCE, "ok", process.env.RESEARCH_WEB_SEARCH === "0"
-      ? `analysing with ${MODELS.analyse} · external research is off, so the site alone`
-      : `analysing with ${MODELS.analyse} · up to ${SEARCH_USES} web searches${known.labels && known.labels.length ? ` · ${known.labels.length} claims already on file are excluded` : ""}`);
-    const aBody = { max_tokens: 8000, messages: [{ role: "user", content: analysePrompt(brand, ex, known) }] };
-    if (process.env.RESEARCH_WEB_SEARCH !== "0" && SEARCH_USES > 0) aBody.tools = [{ type: WEB_SEARCH_TOOL, name: "web_search", max_uses: SEARCH_USES }];
-    let an;
-    try { an = asJson((await call(MODELS.analyse, aBody, "analysis")).text, "analysis"); }
-    catch (e) {
-      if (e.status !== 400 || !aBody.tools) throw e;
-      say(STAGE.AUDIENCE, "warn", "external research is unavailable on this account, so the profile is built from the site alone");
-      delete aBody.tools;
-      an = asJson((await call(MODELS.analyse, aBody, "analysis")).text, "analysis");
-    }
-
-    /* Pass 1 says only what the brand says; pass 2 adds what the world says. */
-    const out = {
-      brand: { geography: ex.geography, markets: ex.markets, category: ex.category },
-      items: [...(ex.items || []).map(i => ({ ...i, provenance: "brand_stated", confidence: "High" })), ...(an.items || [])],
-      products: (ex.products || []).map(p => ({ ...p, provenance: "brand_stated" })),
-      audiences: (ex.audiences || []).map(a => ({ ...a, kind: "intended", provenance: "brand_stated" })),
-      competitors: an.competitors || [], signals: an.signals || []
-    };
-    if (ok(ex.social)) out.items.push({ section: "business", label: "Social presence", text: ex.social, provenance: "brand_stated", confidence: "High", source_url: pages[0].url, excerpt: "" });
-    const pageUrls = pages.map(p => p.url);
-
-    const bUpd = {};
-    if (ok(out.brand && out.brand.geography) && !ok(brand.geography)) bUpd.geography = clamp(out.brand.geography, 80);
-    if (ok(out.brand && out.brand.markets)) bUpd.markets = clamp(out.brand.markets, 160);
-    if (ok(an.summary)) bUpd.summary = clamp(an.summary, 1400);
-    if (Object.keys(bUpd).length) say(STAGE.BUSINESS, "ok", bUpd.summary ? "brand summary written" : `market read from the site: ${bUpd.geography || brand.geography}`, { table: "brands", row: bUpd });
-
-    const counts = {};
-    for (const raw of (out.items || [])) {
-      const row = cleanItem(raw, pageUrls); if (!row) continue;
-      const st = SECTION_STAGE[row.section] != null ? SECTION_STAGE[row.section] : STAGE.BUSINESS;
-      counts[st] = (counts[st] || 0) + 1;
-      say(st, "ok", `${row.label.toLowerCase()} — ${row.provenance.replace("_", " ")}`, { table: "brand_profile_items", row });
-    }
-    for (const [st, label] of [[STAGE.BUSINESS, "the business"], [STAGE.AUDIENCE, "the audience"], [STAGE.POSITIONING, "positioning"], [STAGE.MARKET, "the market"], [STAGE.MARKETING, "marketing presence"], [STAGE.SYNTHESIS, "objectives and assessment"]])
-      say(st, counts[st] ? "ok" : "warn", counts[st] ? `${counts[st]} findings about ${label}` : `nothing could be established about ${label} from what is public`);
-
-    for (const p of (out.products || [])) {
-      if (!ok(p.name)) continue;
-      say(STAGE.PRODUCTS, "ok", `product: ${clamp(p.name, 60)}`, { table: "products_services", row: {
-        name: clamp(p.name, 120), category: clamp(p.category, 80), description: clamp(p.description, 600), features: clamp(p.features, 400),
-        benefits: clamp(p.benefits, 400), problem: clamp(p.problem, 400), pricing: clamp(p.pricing, 160), differentiator: clamp(p.differentiator, 400),
-        provenance: oneOf(p.provenance, PROV, "brand_stated"), source_url: isUrl(p.source_url) ? clamp(p.source_url, 400) : "" } });
-    }
-    for (const a of (out.audiences || [])) {
-      if (!ok(a.description)) continue;
-      say(STAGE.AUDIENCE, "ok", `intended audience: ${clamp(a.name || a.description, 60)}`, { table: "audience_profiles", row: {
-        kind: "intended", name: clamp(a.name, 80), description: clamp(a.description, 600), demographics: clamp(a.demographics, 300),
-        geography: clamp(a.geography, 200), motivations: clamp(a.motivations, 400), pains: clamp(a.pains, 400), triggers: clamp(a.triggers, 400),
-        objections: clamp(a.objections, 400), behaviour: clamp(a.behaviour, 400), basis: "",
-        provenance: oneOf(a.provenance, PROV, "ai_inferred"), source_url: isUrl(a.source_url) ? clamp(a.source_url, 400) : "" } });
-    }
-    say(STAGE.AUDIENCE, "warn", "who actually buys is still unknown: that can only come from your own customer data");
-
-    /* ---- competitors, as candidates: part of market context ---- */
-    const comps = (out.competitors || []).filter(c => ok(c.name));
-    for (const c of comps) {
-      say(STAGE.MARKET, "ok", `candidate: ${clamp(c.name, 60)}`, { table: "competitors", row: {
-        name: clamp(c.name, 120), website: clamp(c.website, 200), category: clamp(c.category, 120),
-        kind: oneOf(c.kind, ["Direct", "Indirect", "Emerging", "Adjacent"], "Direct"), status: "candidate",
-        note: clamp(c.note, 400), why: clamp(c.why, 300), positioning: clamp(c.positioning, 300), value_prop: clamp(c.value_prop, 300),
-        offering: clamp(c.offering, 300), pricing: clamp(c.pricing, 160), audience: clamp(c.audience, 200), messaging: clamp(c.messaging, 300),
-        distribution: clamp(c.distribution, 200), differentiation: clamp(c.differentiation, 300), strengths: clamp(c.strengths, 300),
-        weaknesses: clamp(c.weaknesses, 300), hq: clamp(c.hq, 80), markets: clamp(c.markets, 200),
-        source_url: isUrl(c.source_url) ? clamp(c.source_url, 400) : "", placed_by: "engine" } });
-    }
-    say(STAGE.MARKET, comps.length ? "ok" : "skip", comps.length ? `${comps.length} candidate${comps.length === 1 ? "" : "s"} — none enters the competitive set until you confirm it` : "no competitor could be named from a source");
-
-    /* ---- stage 3: signals ---- */
-    const sigs = (out.signals || []).filter(s => ok(s.text));
-    for (const s of sigs) {
-      const provenance = isUrl(s.source_url) ? "observed" : "ai_inferred";
-      say(STAGE.MARKET, "ok", clamp(s.text, 90), { table: "market_signals", row: {
-        kind: oneOf(s.kind, ["shift", "signal", "crowded", "gap"], "signal"),
-        category: oneOf(s.category, ["consumer", "competitor", "category", "product", "regulatory"], "category"),
-        event: clamp(s.event, 60), text: clamp(s.text, 500), implication: clamp(s.implication, 400), affects: clamp(s.affects, 300),
-        brand_meaning: clamp(s.brand_meaning, 400), excerpt: clamp(s.excerpt, 300), source_type: clamp(s.source_type, 40) || "Other",
-        source_url: isUrl(s.source_url) ? clamp(s.source_url, 400) : "", published_at: isDate(s.published_at) ? s.published_at : null,
-        country: clamp(s.country, 60), confidence: oneOf(s.confidence, CONF, "Low"), relevance: oneOf(s.relevance, CONF, "Medium"),
-        limits: clamp(s.limits, 300), provenance } });
-    }
-    say(STAGE.MARKET, sigs.length ? "ok" : "skip", sigs.length ? `${sigs.length} signal${sigs.length === 1 ? "" : "s"} with a source` : "no sourced signal was found for this category");
-
-    say(STAGE.SYNTHESIS, "skip", "Opportunities are framed by a person from this evidence. Nothing is framed automatically.");
-    say(STAGE.SYNTHESIS, "ok", `routing: ${MODELS.extract} read the pages, ${MODELS.analyse} did the analysis. Opus was not used.`);
+    await runPipeline(brand, (req.body && req.body.known) || {}, say);
     res.end();
   } catch (e) {
     say(STAGE.SITE, "warn", `Run failed: ${e.message || e}`);
