@@ -208,12 +208,46 @@ function links(html, baseUrl) {
 };
 
 /* ---------- the two passes ---------- */
-const RECORD_TOOL = { name: "record", description: "Record the structured result. Call this exactly once, at the end.",
-  input_schema: { type: "object", additionalProperties: true, properties: {} } };
+/* The shape each pass must return. A tool with a real schema is the difference between the model
+   filling every section and the model returning whatever it felt like. */
+const str = d => ({ type: "string", description: d });
+const ITEM = extra => ({ type: "object", required: ["section", "label", "text"], properties: {
+  section: { type: "string", enum: extra.sections, description: "which part of the profile this belongs to" },
+  label: str("one of the exact labels listed in the instructions"), text: str("one plain sentence"),
+  excerpt: str("a short verbatim quote from the source, where there is one"),
+  provenance: { type: "string", enum: extra.prov }, confidence: { type: "string", enum: ["Low", "Medium", "High"] },
+  source_url: str("the URL this came from; empty for an inference") } });
+const EXTRACT_SCHEMA = { type: "object", required: ["items"], properties: {
+  geography: str("country of operation, only if a page says so"), markets: str("other countries named on the pages"),
+  category: str("how the company describes what it sells"), social: str("social handles or links found"),
+  items: { type: "array", items: ITEM({ sections: ["dna", "business", "positioning", "needs"], prov: ["brand_stated"] }) },
+  products: { type: "array", items: { type: "object", required: ["name"], properties: {
+    name: str(""), category: str(""), description: str(""), features: str(""), benefits: str(""), problem: str(""),
+    pricing: str("exactly as printed"), differentiator: str(""), source_url: str("") } } },
+  audiences: { type: "array", items: { type: "object", required: ["description"], properties: {
+    name: str(""), description: str("who the company says it is for"), demographics: str("only if stated"),
+    geography: str(""), motivations: str(""), pains: str(""), source_url: str("") } } } } };
+const ANALYSE_SCHEMA = { type: "object", required: ["summary", "items", "competitors", "signals"], properties: {
+  summary: str("four or five sentences for the founder: what the business does, sells, who it serves, what problem it solves, how it differentiates"),
+  items: { type: "array", description: "At least eight. Cover market context, positioning, needs, marketing presence, objectives and the assessment.",
+    items: ITEM({ sections: ["category", "positioning", "needs", "marketing", "objectives", "assessment"], prov: ["observed", "ai_inferred"] }) },
+  competitors: { type: "array", description: "Companies a source names. Empty only if no source names one.", items: { type: "object", required: ["name"], properties: {
+    name: str(""), website: str(""), kind: { type: "string", enum: ["Direct", "Indirect", "Emerging", "Adjacent"] }, note: str("why it competes with this brand"),
+    why: str("why you are proposing it"), positioning: str(""), value_prop: str(""), offering: str(""), pricing: str(""), audience: str(""),
+    messaging: str(""), distribution: str(""), differentiation: str(""), strengths: str(""), weaknesses: str(""), hq: str(""), markets: str(""), source_url: str("") } } },
+  signals: { type: "array", description: "Developments with a real source you retrieved.", items: { type: "object", required: ["text"], properties: {
+    kind: { type: "string", enum: ["shift", "signal", "crowded", "gap"] },
+    category: { type: "string", enum: ["consumer", "competitor", "category", "product", "regulatory"] },
+    event: str(""), text: str("what is happening, one sentence"), implication: str("why it matters"), affects: str("what it affects"),
+    brand_meaning: str("what it could mean for this brand"), excerpt: str(""), source_type: str(""), source_url: str(""),
+    published_at: str("YYYY-MM-DD"), country: str(""), confidence: { type: "string", enum: ["Low", "Medium", "High"] },
+    relevance: { type: "string", enum: ["Low", "Medium", "High"] }, limits: str("what this evidence cannot tell us") } } } } };
+const recordTool = schema => ({ name: "record", description: "Record the structured result. Call this exactly once, at the end, with every field you can support.", input_schema: schema });
 
 /* Ask for the result as a tool call, so the API validates the JSON instead of us parsing prose.
    Falls back to reading text, then to one cheap repair pass, before giving up. */
-async function callStructured(model, { prompt, maxTokens = 8000, tools = [] }, label) {
+async function callStructured(model, { prompt, maxTokens = 8000, tools = [], schema }, label) {
+  const RECORD_TOOL = recordTool(schema || { type: "object", additionalProperties: true, properties: {} });
   const body = { max_tokens: maxTokens, messages: [{ role: "user", content: prompt }], tools: [...tools, RECORD_TOOL] };
   if (!tools.length) body.tool_choice = { type: "tool", name: "record" };
   const res = await callRaw(model, body, label);
@@ -221,7 +255,7 @@ async function callStructured(model, { prompt, maxTokens = 8000, tools = [] }, l
   if (rec && rec.input && typeof rec.input === "object") return rec.input;
   const text = (res.content || []).filter(c => c.type === "text").map(c => c.text).join("").trim();
   try { return asJson(text, label); } catch (e) {
-    const fixed = await callRaw(MODELS.extract, { max_tokens: maxTokens, tool_choice: { type: "tool", name: "record" }, tools: [RECORD_TOOL],
+    const fixed = await callRaw(MODELS.extract, { max_tokens: maxTokens, tool_choice: { type: "tool", name: "record" }, tools: [recordTool(schema || { type: "object", additionalProperties: true, properties: {} })],
       messages: [{ role: "user", content: `This should have been one JSON object but will not parse. Return the same content through the record tool. Change no values and invent nothing.\n\n${text.slice(0, 60000)}` }] }, label + " repair");
     const c = (fixed.content || []).filter(x => x.type === "tool_use").pop();
     if (c && c.input) return c.input;
@@ -433,7 +467,7 @@ async function runPipeline(brand, known, say) {
   /* ---- stage 1: read the pages (cheap model), then think about them (better model) ---- */
   const chars = pages.reduce((t, p) => t + p.text.length, 0);
   say(STAGE.PRODUCTS, "ok", `reading ${chars.toLocaleString()} characters with ${MODELS.extract} — the cheapest model that can do literal extraction`);
-  const ex = await callStructured(MODELS.extract, { prompt: extractPrompt(brand, pages), maxTokens: 6000 }, "extraction");
+  const ex = await callStructured(MODELS.extract, { prompt: extractPrompt(brand, pages), maxTokens: 8000, schema: EXTRACT_SCHEMA }, "extraction");
 
   say(STAGE.AUDIENCE, "ok", `the next five stages come from one analysis call, so they complete together`);
   say(STAGE.AUDIENCE, "ok", process.env.RESEARCH_WEB_SEARCH === "0"
@@ -441,11 +475,11 @@ async function runPipeline(brand, known, say) {
     : `analysing with ${MODELS.analyse} · up to ${SEARCH_USES} web searches${known.labels && known.labels.length ? ` · ${known.labels.length} claims already on file are excluded` : ""}`);
   const searchTool = process.env.RESEARCH_WEB_SEARCH !== "0" && SEARCH_USES > 0 ? [{ type: WEB_SEARCH_TOOL, name: "web_search", max_uses: SEARCH_USES }] : [];
   let an;
-  try { an = await callStructured(MODELS.analyse, { prompt: analysePrompt(brand, ex, known), tools: searchTool }, "analysis"); }
+  try { an = await callStructured(MODELS.analyse, { prompt: analysePrompt(brand, ex, known), tools: searchTool, maxTokens: 16000, schema: ANALYSE_SCHEMA }, "analysis"); }
   catch (e) {
     if (e.status !== 400 || !searchTool.length) throw e;
     say(STAGE.AUDIENCE, "warn", "external research is unavailable on this account, so the profile is built from the site alone");
-    an = await callStructured(MODELS.analyse, { prompt: analysePrompt(brand, ex, known) }, "analysis");
+    an = await callStructured(MODELS.analyse, { prompt: analysePrompt(brand, ex, known), maxTokens: 16000, schema: ANALYSE_SCHEMA }, "analysis");
   }
 
   /* Pass 1 says only what the brand says; pass 2 adds what the world says. */
@@ -465,9 +499,10 @@ async function runPipeline(brand, known, say) {
   if (ok(an.summary)) bUpd.summary = clamp(an.summary, 1400);
   if (Object.keys(bUpd).length) say(STAGE.BUSINESS, "ok", bUpd.summary ? "brand summary written" : `market read from the site: ${bUpd.geography || brand.geography}`, { table: "brands", row: bUpd });
 
-  const counts = {};
+  const counts = {}, filed = new Set();
   for (const raw of (out.items || [])) {
     const row = cleanItem(raw, pageUrls); if (!row) continue;
+    const key = `${row.section}|${row.label}|${row.text}`; if (filed.has(key)) continue; filed.add(key);
     const st = SECTION_STAGE[row.section] != null ? SECTION_STAGE[row.section] : STAGE.BUSINESS;
     counts[st] = (counts[st] || 0) + 1;
     say(st, "ok", `${row.label.toLowerCase()} — ${row.provenance.replace("_", " ")}`, { table: "brand_profile_items", row });
