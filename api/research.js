@@ -208,6 +208,36 @@ function links(html, baseUrl) {
 };
 
 /* ---------- the two passes ---------- */
+const RECORD_TOOL = { name: "record", description: "Record the structured result. Call this exactly once, at the end.",
+  input_schema: { type: "object", additionalProperties: true, properties: {} } };
+
+/* Ask for the result as a tool call, so the API validates the JSON instead of us parsing prose.
+   Falls back to reading text, then to one cheap repair pass, before giving up. */
+async function callStructured(model, { prompt, maxTokens = 8000, tools = [] }, label) {
+  const body = { max_tokens: maxTokens, messages: [{ role: "user", content: prompt }], tools: [...tools, RECORD_TOOL] };
+  if (!tools.length) body.tool_choice = { type: "tool", name: "record" };
+  const res = await callRaw(model, body, label);
+  const rec = (res.content || []).filter(c => c.type === "tool_use" && c.name === "record").pop();
+  if (rec && rec.input && typeof rec.input === "object") return rec.input;
+  const text = (res.content || []).filter(c => c.type === "text").map(c => c.text).join("").trim();
+  try { return asJson(text, label); } catch (e) {
+    const fixed = await callRaw(MODELS.extract, { max_tokens: maxTokens, tool_choice: { type: "tool", name: "record" }, tools: [RECORD_TOOL],
+      messages: [{ role: "user", content: `This should have been one JSON object but will not parse. Return the same content through the record tool. Change no values and invent nothing.\n\n${text.slice(0, 60000)}` }] }, label + " repair");
+    const c = (fixed.content || []).filter(x => x.type === "tool_use").pop();
+    if (c && c.input) return c.input;
+    throw e;
+  }
+}
+
+async function callRaw(model, body, label) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST", headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model, ...body })
+  });
+  if (!res.ok) { const t = await res.text(); const e = new Error(`${label} (${model}) answered ${res.status}: ${t.slice(0, 300)}`); e.status = res.status; throw e; }
+  return res.json();
+}
+
 async function call(model, body, label) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST", headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
@@ -251,7 +281,9 @@ RULES
 - Do not write an item about competitors, the market, or trends: that is not this step.
 - Use these exact labels where the pages support them:
 ${Object.entries(FIELDS).filter(([k]) => k !== "category").map(([k, l]) => `  ${k}: ${l.join(", ")}`).join("\n")}
-- Plain British English, short sentences, no marketing language.`;
+- Plain British English, short sentences, no marketing language.
+
+Return it through the record tool.`;
 }
 
 /* Pass 2 — the reasoning. It sees pass 1's result, never the raw pages. */
@@ -306,6 +338,8 @@ ON OBJECTIVES AND ASSESSMENT, THE PART MOST SYSTEMS GET WRONG
 - The assessment is a reasoned read for this specific business, not a SWOT. Say where they stand, what actually looks strong, what looks fragile, and what you would look into next. If the evidence is thin, say the assessment is thin.
 - Never claim to know conversion rates, ad performance, revenue or internal plans. No data source is connected.
 
+Finish by calling the record tool exactly once, with the object above as its input.
+
 Aim for 8 to 16 items across category, positioning and needs, 3 to 6 marketing items, 4 to 8 objectives across the three labels, all five assessment labels, 0 to 8 competitors, 0 to 10 signals. Quality over volume. Return the JSON object only.`;
 }
 
@@ -344,10 +378,15 @@ async function runPipeline(brand, known, say) {
 
   /* Candidates come from what the site publishes, never from guessed paths. */
   const cand = new Map();
+  /* The address given and the address served can differ by a www: superyou.in and
+     www.superyou.in are one site, and treating them as two finds no pages at all. */
+  const bare = h => String(h || "").replace(/^www\./i, "").toLowerCase();
+  const sameSite = h => bare(h) === bare(base.host) || bare(h) === bare(new URL(homeUrl).host);
+  const norm = u => u.replace(/\/$/, "").replace("://www.", "://");
   const offer = (u, via) => { let x; try { x = new URL(u, homeUrl); } catch { return; }
-    if (x.host !== base.host || !/^https?:$/.test(x.protocol)) return;
-    x.hash = ""; const key = x.toString().replace(/\/$/, "");
-    if (key === homeUrl.replace(/\/$/, "")) return;
+    if (!sameSite(x.host) || !/^https?:$/.test(x.protocol)) return;
+    x.hash = ""; const key = norm(x.toString());
+    if (key === norm(homeUrl)) return;
     if (SKIP_RE.test(x.pathname + x.search)) return;
     if ((x.pathname + x.search).length > 140) return;
     if (!cand.has(key)) cand.set(key, { url: x.toString(), kind: kindOf(x), via });
@@ -394,21 +433,19 @@ async function runPipeline(brand, known, say) {
   /* ---- stage 1: read the pages (cheap model), then think about them (better model) ---- */
   const chars = pages.reduce((t, p) => t + p.text.length, 0);
   say(STAGE.PRODUCTS, "ok", `reading ${chars.toLocaleString()} characters with ${MODELS.extract} — the cheapest model that can do literal extraction`);
-  const ex = asJson((await call(MODELS.extract, { max_tokens: 6000, messages: [{ role: "user", content: extractPrompt(brand, pages) }] }, "extraction")).text, "extraction");
+  const ex = await callStructured(MODELS.extract, { prompt: extractPrompt(brand, pages), maxTokens: 6000 }, "extraction");
 
   say(STAGE.AUDIENCE, "ok", `the next five stages come from one analysis call, so they complete together`);
   say(STAGE.AUDIENCE, "ok", process.env.RESEARCH_WEB_SEARCH === "0"
     ? `analysing with ${MODELS.analyse} · external research is off, so the site alone`
     : `analysing with ${MODELS.analyse} · up to ${SEARCH_USES} web searches${known.labels && known.labels.length ? ` · ${known.labels.length} claims already on file are excluded` : ""}`);
-  const aBody = { max_tokens: 8000, messages: [{ role: "user", content: analysePrompt(brand, ex, known) }] };
-  if (process.env.RESEARCH_WEB_SEARCH !== "0" && SEARCH_USES > 0) aBody.tools = [{ type: WEB_SEARCH_TOOL, name: "web_search", max_uses: SEARCH_USES }];
+  const searchTool = process.env.RESEARCH_WEB_SEARCH !== "0" && SEARCH_USES > 0 ? [{ type: WEB_SEARCH_TOOL, name: "web_search", max_uses: SEARCH_USES }] : [];
   let an;
-  try { an = asJson((await call(MODELS.analyse, aBody, "analysis")).text, "analysis"); }
+  try { an = await callStructured(MODELS.analyse, { prompt: analysePrompt(brand, ex, known), tools: searchTool }, "analysis"); }
   catch (e) {
-    if (e.status !== 400 || !aBody.tools) throw e;
+    if (e.status !== 400 || !searchTool.length) throw e;
     say(STAGE.AUDIENCE, "warn", "external research is unavailable on this account, so the profile is built from the site alone");
-    delete aBody.tools;
-    an = asJson((await call(MODELS.analyse, aBody, "analysis")).text, "analysis");
+    an = await callStructured(MODELS.analyse, { prompt: analysePrompt(brand, ex, known) }, "analysis");
   }
 
   /* Pass 1 says only what the brand says; pass 2 adds what the world says. */
@@ -500,8 +537,10 @@ module.exports = async function handler(req, res) {
       const home = await readPage(base.toString());
       const maps = await sitemapUrls(base, rb.sitemaps);
       const cand = new Map();
+      const bare = h => String(h || "").replace(/^www\./i, "").toLowerCase();
+      const homeHost = home.ok ? new URL(home.url).host : base.host;
       const offer = u => { let x; try { x = new URL(u, base); } catch { return; }
-        if (x.host !== base.host) return; x.hash = "";
+        if (bare(x.host) !== bare(base.host) && bare(x.host) !== bare(homeHost)) return; x.hash = "";
         const key = x.toString().replace(/\/$/, "");
         if (SKIP_RE.test(x.pathname + x.search) || (x.pathname + x.search).length > 140) return;
         if (!cand.has(key)) cand.set(key, { url: x.toString(), kind: kindOf(x) }); };
